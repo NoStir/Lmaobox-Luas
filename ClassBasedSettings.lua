@@ -41,6 +41,10 @@ classCustomizationFunctions = {
     [CLASS_SOLDIER] = function() 
         -- Custom settings for Soldier
         print("Applying Soldier custom settings...")
+        gui.SetValue("aim bot", 1)
+        gui.SetValue("trigger key", 0)
+        gui.SetValue("trigger shoot key", 0)
+        gui.SetValue("aim key", 79)
         --
     end,
     [CLASS_DEMOMAN] = function() 
@@ -86,13 +90,20 @@ classCustomizationFunctions = {
 
 -- Registers the callback for handling game events
 callbacks.Register("FireGameEvent", function(event)
-    if event:GetName() == "player_changeclass" then
-        local eventClassIndex = event:GetInt("class")
+    if event:GetName() == "player_spawn" then
+        local eventUserId = event:GetInt("userid")
+        local localPlayerIndex = client.GetLocalPlayerIndex()
+        local playerInfo = client.GetPlayerInfo(localPlayerIndex)
         
-        classCustomizationFunctions.default()  -- Apply global default settings first
+        if playerInfo and eventUserId == playerInfo.UserID then
+            local eventTeam = event:GetInt("team")
+            local eventClassIndex = event:GetInt("class")
+        
+            classCustomizationFunctions.default()  -- Apply global default settings first
 
-        if classCustomizationFunctions[eventClassIndex] then
-            classCustomizationFunctions[eventClassIndex]()
+            if classCustomizationFunctions[eventClassIndex] then
+                classCustomizationFunctions[eventClassIndex]()
+            end
         end
     end
 end)
