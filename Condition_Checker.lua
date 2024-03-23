@@ -1,11 +1,3 @@
--- Function to check and print if the local player is in a specific condition
-function CheckCondition(cond, name)
-    local player = entities.GetLocalPlayer()
-    if player and player:InCond(cond) then
-        print("The local player is currently " .. name)
-    end
-end
-
 local conditionsToCheck = {
     {E_TFCOND.TFCond_Slowed, "slowed"},
     {E_TFCOND.TFCond_Zoomed, "zoomed"},
@@ -135,8 +127,19 @@ local conditionsToCheck = {
     {E_TFCOND.TFCond_LostFooting, "lostFooting"},
     {E_TFCOND.TFCond_AirCurrent, "airCurrent"},
 }
-
--- Iterate over the conditions to check if the player is in them
-for _, cond in ipairs(conditionsToCheck) do
-    CheckCondition(cond[1], cond[2])
+local function CheckCondition(cond, name)
+    -- Check if the player has the condition
+    if entities.GetLocalPlayer() == nil then return end
+    if entities.GetLocalPlayer():GetPropInt("m_nPlayerCond") & cond ~= 0 then
+        client.ChatPrintf("You are " .. name)
+    end
 end
+
+local function ConditionChecker()
+    for i = 1, #conditionsToCheck do
+        CheckCondition(conditionsToCheck[i][1], conditionsToCheck[i][2])
+    end
+end
+
+client.ChatPrintf("Condition Checker loaded")
+callbacks.Register("CreateMove", "ConditionChecker", ConditionChecker)

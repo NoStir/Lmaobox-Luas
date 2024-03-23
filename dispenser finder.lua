@@ -15,12 +15,13 @@ local function updateDispenserCountAndBuildingStatus()
     local currentDispensers = {}
     local currentCount = 0
 
-    for i = 1, highestIndex do
-        local entity = entities.GetByIndex(i)
-        if entity and entity:GetClass() == "CObjectDispenser" then
-            local modelName = entity:GetModel() and models.GetModelName(entity:GetModel()) or "Unknown Model"
-            local ammo = entity:GetPropInt("m_iAmmoMetal") or -1 -- Get the current ammo of the dispenser
-            local xx = entity:GetPropInt("m_hBuilder") -- Get the current m_hTouchTrigger of the dispenser
+    for _, dispensers in pairs do
+        local dispenser = entities.GetByIndex(i)
+        if dispenser and dispenser:GetClass() == "CObjectDispenser" then
+            print("Dispenser found?")
+            local modelName = dispenser:GetModel() and models.GetModelName(entity:GetModel()) or "Unknown Model"
+            local ammo = dispenser:GetPropInt("m_iAmmoMetal") or -1 -- Get the current ammo of the dispenser
+            local xx = dispenser:GetPropInt("m_hBuilder") -- Get the current m_hTouchTrigger of the dispenser
             
             -- Additional check for dispenser_blueprint model with non-zero ammo
             local isBlueprintWithAmmo = modelName == "models/buildables/dispenser_blueprint.mdl" and ammo > 0
