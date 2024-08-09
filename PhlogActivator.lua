@@ -1,48 +1,28 @@
-local player = entities.GetLocalPlayer()
-if not player then return end
+local function main()
+    local me = entities.GetLocalPlayer()
+    if not me then return end
 
-local onEnemy = false
-local commandSent = false
-local rage, wep
+    local groundEntity = me:GetPropEntity("m_hGroundEntity")
+    local onEnemy = groundEntity and groundEntity:IsPlayer() and groundEntity:GetTeamNumber() ~= me:GetTeamNumber()
 
-function main()
-    if not player:IsValid() then player = entities.GetLocalPlayer() end
-
-    local playerPos = player:GetAbsOrigin()
-    local traceEndPos = playerPos - Vector3(0, 0, 1)
-
-    local trace = engine.TraceHull(playerPos, traceEndPos, Vector3(-16, -16, -16), Vector3(16, 16, 16), MASK_ALL, function(ent)
-        return ent:IsPlayer()
-    end)
-
-    if trace.entity and trace.entity:IsPlayer() and trace.entity:GetTeamNumber() ~= player:GetTeamNumber() then
-        if not onEnemy then
-            wep = player:GetPropEntity("m_hActiveWeapon")
-            if wep ~= nil then
-                local itemDefinitionIndex = wep:GetPropInt("m_iItemDefinitionIndex")
-                if itemDefinitionIndex ~= 594 then
-                    return
-                end
-            end
-            rage = tostring(player:GetPropFloat("m_flRageMeter"))
-            onEnemy = true
-            commandSent = false
+    if onEnemy and not me:InCond(44) then
+        local wep = me:GetPropEntity("m_hActiveWeapon")
+        if wep and wep:GetPropInt("m_iItemDefinitionIndex") == 594 then
+            local rage = tostring(me:GetPropFloat("m_flRageMeter"))
+            return rage, onEnemy
         end
-    else
-        onEnemy = false
-        commandSent = false
     end
-
-    if onEnemy and not commandSent then
-        client.Command("cyoa_pda_open", "0")
-        commandSent = true
-    end
+    return nil, nil
 end
 
-callbacks.Register("Draw", "PhlogPDA", main)
+local rage, onEnemy = nil, nil
 
-callbacks.Register("CreateMove", function(cmd)
+callbacks.Register("Draw", "PhlogPDA", function()
+    rage, onEnemy = main()
+end)
+
+callbacks.Register("CreateMove", "PhlogAttack", function(cmd)
     if onEnemy and rage == "100.0" then
-        cmd:SetButtons(cmd.buttons | IN_ATTACK2)
+        cmd:SetButtons(cmd:GetButtons() | IN_ATTACK2)
     end
 end)
