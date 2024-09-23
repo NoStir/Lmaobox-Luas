@@ -1,49 +1,22 @@
-local stabbing = false
-local stabbed = false
-local smoothFactor = 0.3
-local lockViewAngles = false
+local shouldLockViewAngles = false
+local originalViewAngles = nil
 local target = nil
-local maxYawChange = 10
 
 local function normalizeAngle(angle)
-    if angle > 180 then
-        angle = angle - 360
-    elseif angle < -180 then
-        angle = angle + 360
-    end
-    return angle
+    angle = angle % 360
+    return angle > 180 and angle - 360 or angle < -180 and angle + 360 or angle
 end
 
 local function calculateLookAtAngles(me, target)
     local targetPos = target:GetAbsOrigin()
     local playerPos = me:GetAbsOrigin()
     local directionVector = targetPos - playerPos
-    directionVector:Normalize()
 
-    local pitch = math.deg(math.atan(directionVector.z / math.sqrt(directionVector.x^2 + directionVector.y^2)))
-    local yaw = math.deg(math.atan(directionVector.y / directionVector.x))
+    local yaw = math.deg(math.atan(directionVector.y, directionVector.x))
+    local distance2D = math.sqrt(directionVector.x^2 + directionVector.y^2)
+    local pitch = math.deg(math.atan(directionVector.z, distance2D))
 
-    if directionVector.x < 0 then
-        yaw = yaw + 180
-    end
-
-    return EulerAngles(normalizeAngle(pitch), normalizeAngle(yaw), 0)
-end
-
-local function clampYawChange(currentYaw, targetYaw, maxChange)
-    local deltaYaw = normalizeAngle(targetYaw - currentYaw)
-    if math.abs(deltaYaw) > maxChange then
-        deltaYaw = maxChange * (deltaYaw > 0 and 1 or -1)
-    end
-    return normalizeAngle(currentYaw + deltaYaw)
-end
-
-local function smoothAngles(currentAngles, targetAngles, factor)
-    local smoothPitch = normalizeAngle(currentAngles.x + (targetAngles.x - currentAngles.x) * factor)
-    local smoothYaw = clampYawChange(currentAngles.y, targetAngles.y, maxYawChange)
-    local smoothRoll = normalizeAngle(currentAngles.z + (targetAngles.z - currentAngles.z) * factor)
-
-    return EulerAngles(smoothPitch, smoothYaw, smoothRoll)
+    return EulerAngles(normalizeAngle(directionVector.z < 0 and -pitch or pitch), normalizeAngle(yaw), 0)
 end
 
 local function isBehindTarget(me, target)
@@ -55,20 +28,20 @@ local function isBehindTarget(me, target)
     targetForward.z = 0
     targetForward:Normalize()
 
-    local flPosVsTargetViewDot = vecToTarget:Dot(targetForward)
-    return flPosVsTargetViewDot > 0
+    return vecToTarget:Dot(targetForward) > 0
 end
 
 local function findClosestTarget(me, players)
-    local closestTarget = nil
-    local closestDistance = 100
+    local closestTarget, closestDistance = nil, 85
 
-    for _, target in ipairs(players) do
-        if target:IsAlive() and target:GetTeamNumber() ~= me:GetTeamNumber() and not target:InCond(TFCond_Ubercharged) then
-            local dist = (target:GetAbsOrigin() - me:GetAbsOrigin()):Length()
+    for _, potentialTarget in ipairs(players) do
+        if potentialTarget:IsAlive() and potentialTarget:GetTeamNumber() ~= me:GetTeamNumber() and not potentialTarget:InCond(TFCond_Ubercharged) then
+            local dist = (potentialTarget:GetAbsOrigin() - me:GetAbsOrigin()):Length()
             if dist <= closestDistance then
-                closestTarget = target
-                closestDistance = dist
+                closestTarget, closestDistance = potentialTarget, dist
+                if closestDistance < 20 then
+                    break
+                end
             end
         end
     end
@@ -76,26 +49,31 @@ local function findClosestTarget(me, players)
     return closestTarget
 end
 
+local function resetViewAngles()
+    if originalViewAngles then
+        engine.SetViewAngles(originalViewAngles)
+        originalViewAngles = nil
+    end
+end
+
 local function backstabAimbot(cmd)
     local me = entities.GetLocalPlayer()
-    if not me or not me:IsAlive() then
+    if not me or not me:IsAlive() then return end
+
+    if not me:GetPropInt("m_iClass") == TF_CLASS_SPY or me:InCond(TFCond_Cloaked) then
+        target, shouldLockViewAngles, originalViewAngles = nil, false, nil
         return
     end
 
     local weapon = me:GetPropEntity("m_hActiveWeapon")
-    if not weapon or not weapon:GetPropBool("m_bKnifeExists") then
-        return
-    end
-
-    if globals.CurTime() - weapon:GetPropFloat("m_flNextPrimaryAttack") < 0 then
-        return
-    end
+    if not weapon or not weapon:IsMeleeWeapon() or not weapon:GetPropBool("m_bKnifeExists") then return end
+    if globals.CurTime() < weapon:GetPropFloat("m_flNextPrimaryAttack") then return end
 
     local readyToBackstab = weapon:GetPropBool("m_bReadyToBackstab")
     local players = entities.FindByClass("CTFPlayer")
 
     if target and not target:IsAlive() then
-        target, stabbed, lockViewAngles, stabbing = nil, false, false, false
+        target, shouldLockViewAngles, originalViewAngles = nil, false, nil
     end
 
     if not target or not target:IsAlive() or (target:GetAbsOrigin() - me:GetAbsOrigin()):Length() > 100 then
@@ -103,18 +81,27 @@ local function backstabAimbot(cmd)
     end
 
     if target and target:IsAlive() and isBehindTarget(me, target) then
-        local lookAtAngles = calculateLookAtAngles(me, target)
-        local smoothLookAtAngles = smoothAngles(engine.GetViewAngles(), lookAtAngles, smoothFactor)
-        engine.SetViewAngles(smoothLookAtAngles)
-        lockViewAngles = true
-
-        if readyToBackstab then
-            stabbing = true
-            cmd:SetButtons(cmd:GetButtons() | IN_ATTACK)
-            stabbed = true
+        if not originalViewAngles then
+            originalViewAngles = engine.GetViewAngles()
         end
+
+        local aimAngles = calculateLookAtAngles(me, target)
+        engine.SetViewAngles(aimAngles)
+
+        -- Suppress the packet to prevent sending the modified view angles
+        if readyToBackstab then
+            cmd:SetSendPacket(false)
+            cmd:SetButtons(cmd:GetButtons() | IN_ATTACK)
+            readyToBackstab = false
+        else
+            cmd:SetSendPacket(true)
+        end
+
+        -- Restore original view angles after the attack
+        resetViewAngles()
     else
-        lockViewAngles = false
+        shouldLockViewAngles = false
+        resetViewAngles()
     end
 end
 
