@@ -1,4 +1,4 @@
-local key = "L" --replace * with appropriate E_ButtonCode, for example: "key = "F"
+local key = "L" -- replace * with appropriate E_ButtonCode, for example: "key = "F"
 
 local mTargetCache = {}
 local bTargetCache = {} 
@@ -10,21 +10,14 @@ local mTargets = {
 }
 
 local last_tick = 0
-local isCacheInitialized = false 
-
-local function GetTargetValues(targets)
-    local values = {}
-    for _, target in ipairs(targets) do
-        values[target] = gui.GetValue(target)
-    end
-    return values
-end
+local isCacheInitialized = false
 
 callbacks.Register("CreateMove", function(cmd)
     local isPressed, tick = input.IsButtonPressed(E_ButtonCode["KEY_" .. key])
 
     if isPressed and tick ~= last_tick then
         if not isCacheInitialized then
+            -- Cache current values without changing them
             for _, target in ipairs(mTargets) do
                 local currentValue = gui.GetValue(target)
                 mTargetCache[target] = currentValue ~= "none" and currentValue or nil
@@ -34,26 +27,28 @@ callbacks.Register("CreateMove", function(cmd)
                 bTargetCache[target] = gui.GetValue(target)
             end
 
-            isCacheInitialized = true
-        else
-            
+            isCacheInitialized = true -- Cache has been initialized, we can toggle from now on
+
+            -- Now immediately perform the first toggle
             for target, cachedValue in pairs(bTargetCache) do
                 local currentValue = gui.GetValue(target)
-
-                if currentValue == 0 then
-                    gui.SetValue(target, cachedValue)
-                else
-                    gui.SetValue(target, 0)
-                end
+                gui.SetValue(target, currentValue == 0 and cachedValue or 0)
             end
 
             for target, cachedValue in pairs(mTargetCache) do
                 local currentValue = gui.GetValue(target)
-                if currentValue == "none" then
-                    gui.SetValue(target, cachedValue or "none")
-                else
-                    gui.SetValue(target, "none")
-                end
+                gui.SetValue(target, currentValue == "none" and (cachedValue or "none") or "none")
+            end
+        else
+            -- Toggle using the cached values
+            for target, cachedValue in pairs(bTargetCache) do
+                local currentValue = gui.GetValue(target)
+                gui.SetValue(target, currentValue == 0 and cachedValue or 0)
+            end
+
+            for target, cachedValue in pairs(mTargetCache) do
+                local currentValue = gui.GetValue(target)
+                gui.SetValue(target, currentValue == "none" and (cachedValue or "none") or "none")
             end
         end
 
