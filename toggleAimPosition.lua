@@ -9,9 +9,7 @@ local function toggleAimPos()
     if input.IsButtonPressed(toggleKey) and toggled == false then
         if aimPos == "head" then
             gui.SetValue("Aim Position", "body")
-        elseif aimPos == "body" then
-            gui.SetValue("Aim Position", "hit scan")
-        elseif aimPos == "hit scan" then
+        else
             gui.SetValue("Aim Position", "head")
         end
         toggled = true
