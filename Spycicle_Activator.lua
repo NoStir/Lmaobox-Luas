@@ -9,15 +9,25 @@ local function IsSpycicleEquipped()
     local itemDefinition = itemschema.GetItemDefinitionByID(itemDefinitionIndex)
     local spyCicleDef = itemschema.GetItemDefinitionByName("The Spy-cicle")
 
-    return itemDefinition and spyCicleDef and itemDefinition:GetIndex() == spyCicleDef:GetIndex()
+    return itemDefinition and spyCicleDef and itemDefinition:GetName() == spyCicleDef:GetName()
 end
 
-local function CheckAndSwitchToSpycicle()
-    local player = entities.GetLocalPlayer()
-    if not player or player:GetPropInt("m_iClass") ~= TF2_Spy then return end
+local wasOnFire = false
 
-    if IsSpycicleEquipped() and player:InCond(TFCond_OnFire) then
-        client.Command("slot3", true)
+local function HandleWeaponSwitch()
+    local player = entities.GetLocalPlayer()
+    if not player then return end
+
+    local onFire = player:InCond(TFCond_OnFire)
+
+    if IsSpycicleEquipped() then
+        if onFire and not wasOnFire then
+            client.Command("slot3", true)
+            wasOnFire = true
+        elseif not onFire and wasOnFire then
+            client.Command("slot1", true)
+            wasOnFire = false
+        end
     end
 end
 
@@ -27,7 +37,11 @@ callbacks.Register("FireGameEvent", function(event)
         local localPlayerIndex = entities.GetLocalPlayer() and entities.GetLocalPlayer():GetIndex() or -1
 
         if victimIndex == localPlayerIndex then
-            CheckAndSwitchToSpycicle()
+            HandleWeaponSwitch()
         end
     end
+end)
+
+callbacks.Register("CreateMove", function()
+    HandleWeaponSwitch()
 end)
