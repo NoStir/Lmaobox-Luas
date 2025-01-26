@@ -15,11 +15,11 @@ local function EdgeJump_CreateMove(cmd)
     local position = localPlayer:GetAbsOrigin()
 
     -- Check ground and crouch state
-    local OnGround  = (flags & FL_ONGROUND) ~= 0
-    local Crouching = (flags & FL_DUCKING) ~= 0
+    local onGround  = (flags & FL_ONGROUND) ~= 0
+    local crouching = (flags & FL_DUCKING) ~= 0
     
     -- If we're not on the ground or are crouching, skip edge jumping
-    if (not OnGround) or Crouching then
+    if (not onGround) or crouching then
         return
     end
 
