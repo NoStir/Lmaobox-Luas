@@ -4,11 +4,16 @@
 -- 1 = Not moving: PDA open, waiting for delay
 -- 2 = Not moving: PDA toggled off (after delay)
 
+local me = nil
 local state = 0
 local stopTick = 0
 local toggleDelayTicks = 2  -- Tick delay for toggling off the PDA
 
 callbacks.Register("CreateMove", "InstantStopMovementMonitor", function(cmd)
+    if not me or me:IsValid() then
+        me = entities.GetLocalPlayer()
+        return
+    end
     local moving = input.IsButtonDown(KEY_W) or input.IsButtonDown(KEY_A) or 
                    input.IsButtonDown(KEY_S) or input.IsButtonDown(KEY_D)
     local curTick = globals.TickCount()
@@ -19,7 +24,7 @@ callbacks.Register("CreateMove", "InstantStopMovementMonitor", function(cmd)
             client.Command("cyoa_pda_open 1", true)
             state = 1
             stopTick = curTick
-        elseif state == 1 and (curTick - stopTick >= toggleDelayTicks) then
+        elseif state == 1 and me:GetPropBool("m_bViewingCYOAPDA") then
             -- After the delay, toggle off the PDA.
             client.Command("cyoa_pda_open 0", true)
             state = 2
