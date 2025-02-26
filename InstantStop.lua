@@ -4,11 +4,11 @@
 -- 1 = Not moving: PDA open, waiting for delay
 -- 2 = Not moving: PDA toggled off (after delay)
 
-local me = nil
+assert(local me = entities.GetLocalPlayer(), "Local player not found!")
 local state = 0
 
 callbacks.Register("CreateMove", "InstantStopMovementMonitor", function(cmd)
-    if not me or me:IsValid() then
+    if not me:IsValid() then
         me = entities.GetLocalPlayer()
         return
     end
