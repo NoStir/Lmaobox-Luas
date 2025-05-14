@@ -2,6 +2,8 @@
 -- Final Version
 
 -- 1. Include the Menu Library
+-- you need to have the menu.lua file in the same directory as this script
+-- https://github.com/compuserscripts/lmaomenu/blob/main/menu.lua
 local menu = require("menu") -- Ensure menu.lua is accessible
 
 -- 2. ESP Settings Table
