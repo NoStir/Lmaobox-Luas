@@ -1,6 +1,6 @@
 --[[
     Lmaobox Triggerbot Script with GUI
-    Public Release Version 1.0
+    Public Release Version 1.1
     By:
     [GitHub] NoStir
     [Discord] purrspire
@@ -11,6 +11,10 @@
 
     Requires menu.lua by compuserscripts
     https://github.com/compuserscripts/lmaomenu/blob/main/menu.lua
+
+    Update log:
+    v1.0 - Initial release
+    v1.1 - Increased default trace distance, set max trace distance to E_TraceLine.MAX_TRACE_LENGTH
 ]]
 
 -- Import the menu library
@@ -18,7 +22,7 @@ local menu = require("menu") -- Make sure menu.lua is accessible
 
 -- Main Tab Settings
 local triggerbot_enabled = true
-local triggerbot_trace_range = 4096
+local triggerbot_trace_range = 8192
 local triggerbot_target_head_only = true
 local triggerbot_zoomed_only = true
 local apply_trace_z_offset = true
@@ -35,7 +39,7 @@ local ignore_disguised_enemies = true
 local ignore_deadringer_enemies = true
 
 -- Constants for settings
-local MAX_TRACE_RANGE = 8192
+local MAX_TRACE_RANGE = E_TraceLine.MAX_TRACE_LENGTH
 local MIN_TRACE_RANGE = 1
 local Z_AXIS_OFFSET_VALUE = 0.1
 local SNIPER_HEADSHOT_DELAY_TIME = 0.2 -- Delay in seconds
@@ -197,7 +201,7 @@ end
 
 local function initialize_triggerbot_menu()
     if triggerbot_menu_window then return end
-    triggerbot_menu_window = menu.createWindow("Triggerbot v1.0 //NoStir", {
+    triggerbot_menu_window = menu.createWindow("Triggerbot v1.1 //NoStir", {
         x = 50,
         y = 50,
         width = 360,
