@@ -19,13 +19,8 @@
          - Fixed sniper headshot delay logic to only apply when zoomed
          - Removed GUI toggle hotkey feature, now syncs with Lmaobox menu
          - Added Reset to Default button
+         - Added status overlay toggle
 
-]]
-
---[[
-    Lmaobox Triggerbot Script with GUI, Settings Persistence.
-    GUI syncs with Lmaobox main menu (gui.IsMenuOpen()).
-    Includes option to toggle status overlay.
 ]]
 
 local menu = require("menu")
@@ -48,7 +43,7 @@ local default_triggerbot_settings = {
     ignore_cloaked_enemies = true,
     ignore_disguised_enemies = true,
     ignore_deadringer_enemies = true,
-    show_status_overlay = true -- New: Toggle for the status text
+    show_status_overlay = true 
 }
 
 -- Settings Table
@@ -220,7 +215,7 @@ function render_settings_tab_widgets()
     end)
 
     local desc_items = {
-        {text = "Lmaobox Triggerbot v1.2 //NoStir"}, -- Kept your version
+        {text = "Lmaobox Triggerbot v1.2 //NoStir"}, 
         {text = "[GitHub]: NoStir"},
         {text = "[Discord]: purrspire"},
         {text = "[Lmaobox Forums]: TimLeary"},
@@ -256,9 +251,9 @@ end
 
 local function initialize_triggerbot_menu()
     if triggerbot_menu_window then return end
-    triggerbot_menu_window = menu.createWindow("Triggerbot v1.2 //NoStir", { -- Kept your version
+    triggerbot_menu_window = menu.createWindow("Triggerbot v1.2 //NoStir", { 
         x = 50, y = 50, width = 390,
-        desiredItems = 12 -- Main tab is likely largest
+        desiredItems = 12 
     })
 end
 
@@ -338,9 +333,7 @@ end
 local function on_draw()
     handle_menu_interaction()
 
-    -- Only draw the overlay if the setting is enabled
     if not triggerbot_settings.show_status_overlay then
-        -- If overlay is off, but triggerbot is on, we might still want to disable Lmaobox's internal one
         if triggerbot_settings.enabled and gui.GetValue("Trigger Shoot") == 1 then
             gui.SetValue("Trigger Shoot", 0)
         end
@@ -375,12 +368,12 @@ if triggerbot_menu_window and gui.IsMenuOpen() then
     triggerbot_menu_window:focus(); update_triggerbot_menu_tabs()
 end
 
-print("Lmaobox Triggerbot v1.2 //NoStir loaded. GUI syncs with Lmaobox menu.") -- Kept your version
-client.ChatPrintf("Lmaobox Triggerbot v1.2 //NoStir loaded. GUI syncs with Lmaobox menu.") -- Kept your version
+print("Lmaobox Triggerbot v1.2 //NoStir loaded. GUI syncs with Lmaobox menu.")
+client.ChatPrintf("Lmaobox Triggerbot v1.2 //NoStir loaded. GUI syncs with Lmaobox menu.")
 
 callbacks.Register("Unload","TriggerbotUnload",function()
     save_settings()
     callbacks.Unregister("CreateMove","TriggerbotCM"); callbacks.Unregister("Draw","TriggerbotDraw")
     if triggerbot_menu_window then menu.closeAll(); triggerbot_menu_window=nil end
-    print("Lmaobox Triggerbot v1.2 //NoStir unloaded. Settings saved.") -- Kept your version
+    print("Lmaobox Triggerbot v1.2 //NoStir unloaded. Settings saved.")
 end)
