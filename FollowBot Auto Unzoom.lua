@@ -1,4 +1,4 @@
-local botSID = "[U:1:1395425443]"
+local botSID = ""
 
 -- Set targetSteamID in [U:x:xxxxxxxxxx] format or leave it to automatically target the party leader
 local targetSteamID = botSID -- Default placeholder SteamID, change this.
