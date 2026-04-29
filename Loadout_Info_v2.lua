@@ -59,6 +59,18 @@ local function PrintKeyValue(key, value, indentStr)
     print(prefix .. key .. ": " .. valueStr)
 end
 
+local function GetSortedIntegerKeys(tbl)
+    local keys = {}
+    for key in pairs(tbl) do
+        if type(key) == "number" then
+            keys[#keys + 1] = key
+        end
+    end
+
+    table.sort(keys)
+    return keys
+end
+
 -- =============================================================================
 -- Information Display Modules
 -- =============================================================================
@@ -70,24 +82,12 @@ local function PrintAmmoInfo(localPlayer)
     local ammoTable = localPlayer:GetPropDataTableInt("localdata", "m_iAmmo")
 
     if ammoTable then
-        local hasSequentialAmmo = false
-        -- ipairs only iterates over the sequential integer keys starting from 1
-        for i, ammoCount in ipairs(ammoTable) do
-            -- Mapping index 'i' to ammo type names requires external data/knowledge
-            PrintKeyValue("Ammo Index " .. i, ammoCount, INDENT)
-            hasSequentialAmmo = true
-        end
-
-        -- Check if the table might have non-sequential keys if ipairs found nothing
-        if not hasSequentialAmmo then
-            local hasAnyKey = false
-            for _ in pairs(ammoTable) do hasAnyKey = true; break end -- Efficient check for any key
-
-            if hasAnyKey then
-                print(INDENT .. "Ammo table has non-sequential keys or starts indices > 1.")
-                -- Consider adding a 'pairs' loop here if full dump is desired
-            else
-                print(INDENT .. "Ammo table is empty.")
+        local ammoIndices = GetSortedIntegerKeys(ammoTable)
+        if #ammoIndices == 0 then
+            print(INDENT .. "Ammo table is empty.")
+        else
+            for _, ammoIndex in ipairs(ammoIndices) do
+                PrintKeyValue("Ammo Index " .. ammoIndex, ammoTable[ammoIndex], INDENT)
             end
         end
     else
@@ -189,8 +189,12 @@ local function PrintMeleeWeaponInfo(weaponEntity, weaponDefName)
     local subIndent = INDENT .. INDENT
     PrintKeyValue("Swing Range", weaponEntity:GetSwingRange(), subIndent)
 
-    -- Simulate a swing trace to see what would be hit
-    local traceResult = weaponEntity:DoSwingTrace() -- Assumes this function exists and returns a trace table
+    local traceResult = weaponEntity:DoSwingTrace()
+    if not traceResult then
+        print(subIndent .. "Swing trace unavailable.")
+        return
+    end
+
     PrintKeyValue("Swing Trace Hit Entity", traceResult.entity, subIndent)
     if traceResult.entity and traceResult.entity:IsValid() then
         PrintKeyValue("  -> Entity Class", traceResult.entity:GetClass(), subIndent)
@@ -229,13 +233,20 @@ local function PrintMedigunInfo(weaponEntity, weaponDefName, localPlayer)
     PrintKeyValue("Heal Detach Range", weaponEntity:GetMedigunHealingRange(), subIndent)
     PrintKeyValue("Can Heal Self", CanHealTarget(localPlayer), subIndent)
 
-    -- Check what the player is looking at for potential heal target info
-    local eyePos = localPlayer:GetAbsOrigin() + localPlayer:GetPropVector("localdata", "m_vecViewOffset[0]")
-    local lookDir = engine.GetViewAngles():Forward()
-    -- Use a reasonable trace distance for typical medigun range checks
-    local traceEnd = eyePos + lookDir * (weaponEntity:GetMedigunHealingRange() or 1000) -- Use heal range or default
+    local eyeOrigin = localPlayer:GetAbsOrigin()
+    local viewOffset = localPlayer:GetPropVector("localdata", "m_vecViewOffset[0]")
+    local viewAngles = engine.GetViewAngles()
+    local healRange = weaponEntity:GetMedigunHealingRange() or 1000
+
+    if not eyeOrigin or not viewOffset or not viewAngles then
+        print(subIndent .. "Could not build medigun trace origin.")
+        return
+    end
+
+    local eyePos = eyeOrigin + viewOffset
+    local traceEnd = eyePos + viewAngles:Forward() * healRange
     local tr = engine.TraceLine(eyePos, traceEnd, TRACE_MASK)
-    local targetEntity = tr.entity
+    local targetEntity = tr and tr.entity or nil
 
     if targetEntity and targetEntity:IsValid() then
         PrintKeyValue("Target in Crosshair", targetEntity:GetClass(), subIndent)
@@ -265,7 +276,7 @@ local function DisplayWeaponInfo(weaponEntity, weaponSlotName, localPlayer)
 
     -- Attempt to get the Item Definition
     local itemDefinitionIndex = weaponEntity:GetPropInt("m_iItemDefinitionIndex")
-    local itemDefinition = itemschema.GetItemDefinitionByID(itemDefinitionIndex)
+    local itemDefinition = itemDefinitionIndex and itemschema.GetItemDefinitionByID(itemDefinitionIndex) or nil
 
     if not itemDefinition then
         print(INDENT .. "Could not retrieve item definition for " .. weaponSlotName .. " (Index: " .. tostring(itemDefinitionIndex) .. ")")

@@ -9,12 +9,10 @@
 -- - Min on-screen size & entry cap, smooth fade-out
 ------------------------------------------------------------
 
-package.loaded["menu"] = nil -- Forces Lua to reload the module
-
 local loaded, menu = pcall(require, "menu")
 if not loaded then
-    print("Failed to load menu.lua:", menu)
-    return
+    menu = nil
+    print("menu.lua not found; bracket config window disabled.")
 end
 
 -- =======================
@@ -223,19 +221,20 @@ local function onGameEvent(event)
     local name = event:GetName()
     if name ~= "player_hurt" and name ~= "player_death" then return end
 
-    local me = entities.GetLocalPlayer(); if not me then return end
+    local me = entities.GetLocalPlayer(); if not me or not me:IsValid() then return end
     local victim   = entities.GetByUserID(event:GetInt("userid"))
     local attacker = entities.GetByUserID(event:GetInt("attacker"))
 
-    if not victim or not attacker or me:GetIndex() ~= attacker:GetIndex() or victim:GetIndex() == me:GetIndex() then return end
+    if not victim or not victim:IsValid() or not attacker or not attacker:IsValid() then return end
+    if me:GetIndex() ~= attacker:GetIndex() or victim:GetIndex() == me:GetIndex() then return end
 
-    if settings.only_enemies and victim.GetTeamNumber and me.GetTeamNumber then
+    if settings.only_enemies then
         if victim:GetTeamNumber() == me:GetTeamNumber() then return end
     end
 
     if name == "player_hurt" and (event:GetInt("health") or 1) <= 0 then return end
 
-    local hb = victim.GetHitboxes and victim:GetHitboxes()
+    local hb = victim:GetHitboxes()
     if not hb or #hb == 0 then return end
 
     local min3, max3 = computeOverallBBox(hb)
@@ -263,6 +262,7 @@ callbacks.Register("FireGameEvent", "premium_brackets_events", onGameEvent)
 -- Draw
 -- =======================
 local function onDraw()
+    if engine.Con_IsVisible() or engine.IsGameUIVisible() then return end
     if #hits == 0 then return end
     local now = globals.RealTime()
 
@@ -272,7 +272,12 @@ local function onDraw()
             table.remove(hits, i)
         else
             if h.dynamic and h.ent then
-                local hb = h.ent.GetHitboxes and h.ent:GetHitboxes()
+                if not h.ent:IsValid() or h.ent:IsDormant() then
+                    table.remove(hits, i)
+                    goto continue
+                end
+
+                local hb = h.ent:GetHitboxes()
                 if hb and #hb > 0 then
                     local mn, mx = computeOverallBBox(hb)
                     if mn and mx then h.min3, h.max3 = mn, mx end
@@ -305,7 +310,7 @@ local function onDraw()
                 for idx = 1, #settings.kill_flash_colors - 1 do
                     local t1, c1 = settings.kill_flash_colors[idx].time, settings.kill_flash_colors[idx].color
                     local t2, c2 = settings.kill_flash_colors[idx+1].time, settings.kill_flash_colors[idx+1].color
-                    if ft >= t1 and ft <= t2 then
+                    if t2 > t1 and ft >= t1 and ft <= t2 then
                         cr, cg, cb = lerpColor((ft - t1) / (t2 - t1), c1, c2)
                         break
                     end
@@ -317,6 +322,7 @@ local function onDraw()
                 scaleX=sx, scaleY=sy, thickness=h.thickness, shadow=h.shadow
             }, alpha)
         end
+        ::continue::
     end
 end
 
@@ -329,17 +335,21 @@ callbacks.Register("Draw", "premium_brackets_draw", onDraw)
 -- ==================================
 -- Window + Tabs (menu.lua components)
 -- ==================================
-local wnd = menu.createWindow("Brackets Config", {
-    x=120, y=120, width=380, desiredItems=12, titleBarHeight=30, itemHeight=24
-})
-wnd:focus()
+local wnd
+local tabs
 
-local tabs = wnd:renderTabPanel()
+if menu then
+    wnd = menu.createWindow("Brackets Config", {
+        x=120, y=120, width=380, desiredItems=12, titleBarHeight=30, itemHeight=24
+    })
+    wnd:unfocus()
+    tabs = wnd:renderTabPanel()
+end
 
 ------------------------------------------------------------
 -- Tab: General
 ------------------------------------------------------------
-tabs:addTab("General", function()
+if tabs then tabs:addTab("General", function()
     wnd:clearWidgets()
 
     wnd:createCheckbox("Only show on enemies", settings.only_enemies, function(on) settings.only_enemies = on end)
@@ -366,12 +376,12 @@ tabs:addTab("General", function()
         settings.pop_in_time, settings.pop_in_scale, settings.kill_pulse_time, settings.kill_pulse_scale = 0.12, 1.12, 0.22, 1.10
         settings.follow_hurt = true
     end)
-end)
+end) end
 
 ------------------------------------------------------------
 -- Tab: Hurt (follow)
 ------------------------------------------------------------
-tabs:addTab("Hurt", function()
+if tabs then tabs:addTab("Hurt", function()
     wnd:clearWidgets()
     wnd:createCheckbox("Follow target (dynamic)", settings.follow_hurt, function(on) settings.follow_hurt = on end)
     wnd:createSlider("Duration (sec)", settings.duration_sec, 0.2, 5.0, function(v) settings.duration_sec = math.floor(v*100+0.5)/100 end)
@@ -389,12 +399,12 @@ tabs:addTab("Hurt", function()
         elseif i==5 then setRGB(settings.color_hurt, 255,100,255)
         end
     end)
-end)
+end) end
 
 ------------------------------------------------------------
 -- Tab: Kill (snapshot + flash)
 ------------------------------------------------------------
-tabs:addTab("Kill", function()
+if tabs then tabs:addTab("Kill", function()
     wnd:clearWidgets()
     wnd:createSlider("Duration (sec)", settings.duration_kill, 0.2, 6.0, function(v) settings.duration_kill = math.floor(v*100+0.5)/100 end)
     wnd:createSlider("Bracket length (px)", settings.bracket_len_kill, 2, 80, function(v) settings.bracket_len_kill = math.floor(v + 0.5) end)
@@ -425,23 +435,23 @@ tabs:addTab("Kill", function()
             }
         end
     end)
-end)
+end) end
 
 ------------------------------------------------------------
 -- Tab: Animation
 ------------------------------------------------------------
-tabs:addTab("Animation", function()
+if tabs then tabs:addTab("Animation", function()
     wnd:clearWidgets()
     wnd:createSlider("Pop-in time (s)",  settings.pop_in_time, 0.00, 0.40, function(v) settings.pop_in_time = math.floor(v*100+0.5)/100 end)
     wnd:createSlider("Pop-in scale",     settings.pop_in_scale, 1.00, 1.50, function(v) settings.pop_in_scale = math.floor(v*100+0.5)/100 end)
     wnd:createSlider("Kill pulse time (s)",  settings.kill_pulse_time, 0.00, 0.60, function(v) settings.kill_pulse_time = math.floor(v*100+0.5)/100 end)
     wnd:createSlider("Kill pulse scale",     settings.kill_pulse_scale, 1.00, 1.60, function(v) settings.kill_pulse_scale = math.floor(v*100+0.5)/100 end)
-end)
+end) end
 
 ------------------------------------------------------------
 -- Tab: Debug
 ------------------------------------------------------------
-tabs:addTab("Debug", function()
+if tabs then tabs:addTab("Debug", function()
     wnd:clearWidgets()
     wnd:createButton("Clear all active entries", function()
         if hits then
@@ -451,7 +461,7 @@ tabs:addTab("Debug", function()
     wnd:createButton("Test white (local player)", function()
         local me = entities.GetLocalPlayer()
         if not me then return end
-        local hb = me.GetHitboxes and me:GetHitboxes()
+        local hb = me:GetHitboxes()
         if not hb or #hb==0 then return end
         local mn,mx = computeOverallBBox(hb)
         if not mn or not mx then return end
@@ -460,23 +470,35 @@ tabs:addTab("Debug", function()
                   settings.bracket_len, settings.pad_x, settings.pad_y, settings.scale_x, settings.scale_y,
                   settings.thickness_hurt, false, false, settings.follow_hurt)
     end)
-end)
+end) end
 
 -- ========================
 -- Toggle GUI
 -- ========================
 local function onGuiHotkey()
+    if not wnd then
+        return
+    end
+
     if gui.IsMenuOpen() then
         if not wnd.isOpen then
             wnd:focus()
         end
     else 
         if wnd.isOpen then
-            wnd:close()
+            wnd:unfocus()
         end
     end
 end
 
 callbacks.Register("Draw", "brackets_gui_hotkey", onGuiHotkey)
+callbacks.Register("Unload", "premium_brackets_unload", function()
+    callbacks.Unregister("FireGameEvent", "premium_brackets_events")
+    callbacks.Unregister("Draw", "premium_brackets_draw")
+    callbacks.Unregister("Draw", "brackets_gui_hotkey")
+    if menu and wnd and menu.closeAll then
+        menu.closeAll()
+    end
+end)
 
 --== End of test.lua ==--

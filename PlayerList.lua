@@ -1,223 +1,240 @@
 --[[
-    Player Tracker HUD (Event-Driven Optimization)
+    Player Tracker HUD
 
-    Maintains a player list using player_connect and player_disconnect events.
-    Displays a list of players and their current world coordinates.
-    Updates position data periodically to improve performance.
-    Highlights self, teammates, and enemies with different colors.
+    Maintains a player list using connect/disconnect events and refreshes
+    the displayed position data periodically.
 ]]
 
--- Configuration
 local hudStartX = 10
 local hudStartY = 150
 local lineHeight = 16
 local hudFontName = "Verdana"
 local hudFontSize = 14
 local hudFontWeight = 700
-local updateInterval = 0.1 -- Update visual data 10 times per second
+local updateInterval = 0.1
 
--- Colors (RGBA)
-local colorSelf = {0, 255, 255, 255}
-local colorTeam = {100, 150, 255, 255}
-local colorEnemy = {255, 100, 100, 255}
-local colorSpectator = {200, 200, 200, 255}
-local colorDefault = {255, 255, 255, 255}
-local colorError = {255, 0, 0, 255}
-local colorInfo = {0, 255, 0, 255}
-local colorWarn = {255, 165, 0, 255}
+local colorSelf = { 0, 255, 255, 255 }
+local colorTeam = { 100, 150, 255, 255 }
+local colorEnemy = { 255, 100, 100, 255 }
+local colorSpectator = { 200, 200, 200, 255 }
+local colorDefault = { 255, 255, 255, 255 }
+local colorError = { 255, 0, 0, 255 }
+local colorInfo = { 0, 255, 0, 255 }
+local colorWarn = { 255, 165, 0, 255 }
 
--- Global storage
-local g_TrackedPlayers = {}     -- Key: userID, Value: { name, entityIndex, steamID }
-local playerDisplayData = {}    -- Processed data for drawing
+local trackedPlayers = {}
+local playerDisplayData = {}
 local lastUpdateTime = 0
 local playerCount = 0
 
--- Create the font
 local hudFont = draw.CreateFont(hudFontName, hudFontSize, hudFontWeight, FONTFLAG_OUTLINE)
 if not hudFont then
     printc(colorError[1], colorError[2], colorError[3], 255, "Error: Failed to create font '", hudFontName, "' for Player Tracker HUD.")
     hudFont = 0
 end
 
--- Function to add/update a player in our tracked list
-local function addOrUpdatePlayer(userID, name, entityIndex, steamID)
-    if userID and userID ~= 0 then
-        g_TrackedPlayers[userID] = {
-            name = name or "(Unknown)",
-            entityIndex = entityIndex,
-            steamID = steamID or "(No SteamID)"
-        }
-        printc(colorInfo[1], colorInfo[2], colorInfo[3], 255, "Player Added/Updated: ", name, " (UID:", userID, " EID:", entityIndex, ")")
+local function addOrUpdatePlayer(userID, name, steamID)
+    if not userID or userID == 0 then
+        return
     end
+
+    local existing = trackedPlayers[userID] or {}
+    existing.name = name or existing.name or ("UserID " .. userID)
+    existing.steamID = steamID or existing.steamID or "(No SteamID)"
+    trackedPlayers[userID] = existing
 end
 
--- Function to remove a player from our tracked list
 local function removePlayer(userID)
-    if userID and g_TrackedPlayers[userID] then
-        printc(colorWarn[1], colorWarn[2], colorWarn[3], 255, "Player Removed: ", g_TrackedPlayers[userID].name, " (UID:", userID, ")")
-        g_TrackedPlayers[userID] = nil
+    if userID then
+        trackedPlayers[userID] = nil
     end
 end
 
--- Function to perform initial scan for players already on the server
+local function clearPlayers()
+    trackedPlayers = {}
+    playerDisplayData = {}
+    playerCount = 0
+end
+
+local function syncPlayerInfoForIndex(index)
+    local playerInfo = client.GetPlayerInfo(index)
+    if not playerInfo or not playerInfo.UserID or playerInfo.UserID == 0 then
+        return
+    end
+
+    addOrUpdatePlayer(playerInfo.UserID, playerInfo.Name, playerInfo.SteamID)
+end
+
 local function initialPlayerScan()
-    printc(colorInfo[1], colorInfo[2], colorInfo[3], 255, "Performing initial player scan...")
-    local currentPlayers = 0
-    for i = 1, globals.MaxClients() do
-        local ent = entities.GetByIndex(i)
-        -- Check if it's a valid player entity
-        if ent and ent:IsValid() and ent:IsPlayer() then
-            local success, pInfo = pcall(client.GetPlayerInfo, i)
-            if success and pInfo and pInfo.UserID and pInfo.UserID ~= 0 then
-                addOrUpdatePlayer(pInfo.UserID, pInfo.Name, i, pInfo.SteamID)
-                currentPlayers = currentPlayers + 1
-            else
-                 -- Fallback if GetPlayerInfo fails but entity exists
-                 local nameFallback = client.GetPlayerNameByIndex(i) or ("Player_" .. i)
-                 -- We don't have UserID here easily, could potentially get later if needed
-                 -- For now, we might skip adding them here or add with a placeholder ID if absolutely necessary
-                 printc(colorWarn[1], colorWarn[2], colorWarn[3], 255, "Could not get full info for player index:", i, " Name:", nameFallback)
-            end
+    clearPlayers()
+
+    for index = 1, globals.MaxClients() do
+        local entity = entities.GetByIndex(index)
+        if entity and entity:IsValid() and entity:IsPlayer() then
+            syncPlayerInfoForIndex(index)
         end
     end
-    printc(colorInfo[1], colorInfo[2], colorInfo[3], 255, "Initial scan complete. Found ", currentPlayers, " players.")
 end
 
--- Game Event Handler
-local function onGameEvent(event)
-    local eventName = event:GetName()
-
-    if eventName == "player_connect" then
-        local name = event:GetString("name")
-        local index = event:GetInt("index") -- This is player slot (0-based usually for events?) Lmaobox docs say byte, let's assume it's correct index for GetByIndex
-        local userID = event:GetInt("userid")
-        local networkid = event:GetString("networkid")
-        local entityIndex = index
-        entityIndex = index + 1
-
-        addOrUpdatePlayer(userID, name, entityIndex, networkid)
-
-    elseif eventName == "player_disconnect" then
-        local userID = event:GetInt("userid")
-        removePlayer(userID)
+local function getDisplayColor(playerEntity, localPlayer, myTeam, myIndex)
+    local entityIndex = playerEntity:GetIndex()
+    if entityIndex == myIndex then
+        return colorSelf
     end
+
+    local team = playerEntity:GetTeamNumber()
+    if team == E_TeamNumber.TEAM_SPECTATOR or team == E_TeamNumber.TEAM_UNASSIGNED then
+        return colorSpectator
+    end
+
+    if team == myTeam then
+        return colorTeam
+    end
+
+    return colorEnemy
 end
 
--- Function to update visual player data (iterates g_TrackedPlayers)
+local function getMedicUberText(playerEntity, chargeLevels)
+    local playerClass = playerEntity:GetPropInt("m_iClass")
+    if playerClass ~= TF2_Medic then
+        return nil
+    end
+
+    local playerIndex = playerEntity:GetIndex()
+    local chargeLevel = chargeLevels and chargeLevels[playerIndex] or nil
+    if chargeLevel == nil or chargeLevel < 0 then
+        return "Medic"
+    end
+
+    return string.format("Medic Uber: %d%%", chargeLevel)
+end
+
+local function buildDisplayRow(name, position, extraText)
+    if position then
+        local rowText = string.format("%s - X: %.1f Y: %.1f Z: %.1f", name, position.x, position.y, position.z)
+        if extraText and extraText ~= "" then
+            rowText = rowText .. " - " .. extraText
+        end
+        return rowText
+    end
+
+    return string.format("%s - Position unavailable", name)
+end
+
 local function updatePlayerData()
-    local me = entities.GetLocalPlayer()
-    if not me or not me:IsValid() then
+    local localPlayer = entities.GetLocalPlayer()
+    if not localPlayer or not localPlayer:IsValid() then
         playerDisplayData = {}
         playerCount = 0
         return
     end
-    local myTeam = me:GetTeamNumber()
-    local myIndex = me:GetIndex()
 
+    local myTeam = localPlayer:GetTeamNumber()
+    local myIndex = localPlayer:GetIndex()
     local newDisplayData = {}
-    local currentCount = 0
-    local playersToRemove = {} -- List of userIDs to remove after iteration
+    local playerResources = entities.GetPlayerResources()
+    local chargeLevels = playerResources and playerResources:GetPropDataTableInt("m_iChargeLevel") or nil
 
-    for userID, playerData in pairs(g_TrackedPlayers) do
-        local ent = entities.GetByIndex(playerData.entityIndex)
+    for userID, trackedPlayer in pairs(trackedPlayers) do
+        local entity = entities.GetByUserID(userID)
+        local row = {
+            name = trackedPlayer.name,
+            text = buildDisplayRow(trackedPlayer.name, nil),
+            color = colorDefault,
+            priority = 4,
+        }
 
-        if not ent or not ent:IsValid() then
-            -- Mark for removal if entity is no longer valid
-            table.insert(playersToRemove, userID)
-            goto continue_update -- Skip to next player in loop
+        if entity and entity:IsValid() and entity:IsPlayer() then
+            syncPlayerInfoForIndex(entity:GetIndex())
+
+            row.name = trackedPlayers[userID].name
+            row.text = buildDisplayRow(row.name, entity:GetAbsOrigin(), getMedicUberText(entity, chargeLevels))
+            row.color = getDisplayColor(entity, localPlayer, myTeam, myIndex)
+
+            local team = entity:GetTeamNumber()
+            if entity:GetIndex() == myIndex then
+                row.priority = 1
+            elseif team == myTeam then
+                row.priority = 2
+            elseif team == E_TeamNumber.TEAM_SPECTATOR or team == E_TeamNumber.TEAM_UNASSIGNED then
+                row.priority = 4
+            else
+                row.priority = 3
+            end
         end
 
-        -- Entity is valid, proceed
-        local pOrigin = ent:GetAbsOrigin()
-        local pTeam = ent:GetTeamNumber()
-        local pName = playerData.name -- Use stored name
-
-        local color = colorDefault
-
-        -- Determine color
-        if playerData.entityIndex == myIndex then
-            color = colorSelf
-        elseif pTeam == TEAM_SPECTATOR then
-            color = colorSpectator
-        elseif pTeam == myTeam then
-            color = colorTeam
-        else
-            color = colorEnemy
-        end
-
-        -- Format position string
-        local posStr = "???"
-        if pOrigin then
-            posStr = string.format("X: %.1f Y: %.1f Z: %.1f", pOrigin.x, pOrigin.y, pOrigin.z)
-        end
-
-        -- Store processed data for drawing
-        table.insert(newDisplayData, {
-            name = pName,
-            text = string.format("%s - %s", pName, posStr),
-            color = color
-        })
-        currentCount = currentCount + 1
-
-        ::continue_update::
+        newDisplayData[#newDisplayData + 1] = row
     end
 
-    -- Remove players marked for removal
-    for _, uidToRemove in ipairs(playersToRemove) do
-        removePlayer(uidToRemove)
-        printc(colorWarn[1], colorWarn[2], colorWarn[3], 255, "Removed invalid player entry for UserID:", uidToRemove)
-    end
+    table.sort(newDisplayData, function(left, right)
+        if left.priority ~= right.priority then
+            return left.priority < right.priority
+        end
 
-    -- Update the display data and count
+        return left.name < right.name
+    end)
+
     playerDisplayData = newDisplayData
-    playerCount = currentCount
+    playerCount = #newDisplayData
 end
 
--- Main drawing function (lightweight)
+local function onGameEvent(event)
+    local eventName = event:GetName()
+
+    if eventName == "player_connect" or eventName == "player_connect_client" then
+        addOrUpdatePlayer(
+            event:GetInt("userid"),
+            event:GetString("name"),
+            event:GetString("networkid")
+        )
+        return
+    end
+
+    if eventName == "player_disconnect" then
+        removePlayer(event:GetInt("userid"))
+        return
+    end
+
+    if eventName == "game_newmap" then
+        initialPlayerScan()
+    end
+end
+
 local function drawPlayerTrackerHUD()
     if engine.Con_IsVisible() or engine.IsGameUIVisible() then
         return
     end
 
-    -- Check if it's time to update the visual data
     local currentTime = globals.CurTime()
     if currentTime >= lastUpdateTime + updateInterval then
         updatePlayerData()
         lastUpdateTime = currentTime
     end
 
-    -- Set the font for drawing
     draw.SetFont(hudFont)
 
     local drawY = hudStartY
-
-    -- Draw the header
-    draw.Color(255, 255, 255, 255) -- White for header
+    draw.Color(255, 255, 255, 255)
     draw.Text(math.floor(hudStartX), math.floor(drawY - lineHeight), "Player Positions (" .. playerCount .. ")")
 
-    -- Iterate through the *pre-processed* display data and draw
-    for i, data in ipairs(playerDisplayData) do
-        local r, g, b, a = data.color[1], data.color[2], data.color[3], data.color[4]
-        draw.Color(r, g, b, a)
+    for _, data in ipairs(playerDisplayData) do
+        draw.Color(data.color[1], data.color[2], data.color[3], data.color[4])
         draw.Text(math.floor(hudStartX), math.floor(drawY), data.text)
         drawY = drawY + lineHeight
     end
 end
 
--- Perform initial scan *before* registering Draw
 initialPlayerScan()
-updatePlayerData() -- Populate display data initially
+updatePlayerData()
 lastUpdateTime = globals.CurTime()
 
--- Register callbacks
 callbacks.Register("FireGameEvent", "PlayerTrackerEventHandler", onGameEvent)
 callbacks.Register("Draw", "PlayerTrackerHUD_EventDriven", drawPlayerTrackerHUD)
 
-printc(colorInfo[1], colorInfo[2], colorInfo[3], 255, "Player Tracker HUD script loaded (Event-Driven).")
+printc(colorInfo[1], colorInfo[2], colorInfo[3], 255, "Player Tracker HUD loaded.")
 
--- Unregister callbacks on unload
 callbacks.Register("Unload", "PlayerTrackerHUD_EventDriven_Unload", function()
     callbacks.Unregister("FireGameEvent", "PlayerTrackerEventHandler")
     callbacks.Unregister("Draw", "PlayerTrackerHUD_EventDriven")
-    printc(colorWarn[1], colorWarn[2], colorWarn[3], 255, "Player Tracker HUD script unloaded (Event-Driven).")
+    printc(colorWarn[1], colorWarn[2], colorWarn[3], 255, "Player Tracker HUD unloaded.")
 end)
