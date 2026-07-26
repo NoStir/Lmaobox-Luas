@@ -20,17 +20,6 @@ local function playerName(entityIndex)
     return name
 end
 
---[[
-
-local function randomID()
-    local firstHalf = math.random(71561198, 76561198)
-    local secondHalf = math.random(0, 999999999)
-
-    return string.format("%d%09d", firstHalf, secondHalf)
-end
-
-]]
-
 local function randomID()
     local firsthalf = math.random(71561198, 76561198)
     local secondhalf = math.random(287178989, 787178566)
