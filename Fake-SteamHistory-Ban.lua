@@ -29,17 +29,18 @@ end
 
 local function randomDate()
     local year = math.random(2025, 2026)
-    local month = function()
-        if year == 2025 then return math.random(8, 12)
-        elseif year == 2026 then return math.random(1, 6) end
-    end
-    local day = math.random(1, 28)
-    return string.format("%04d-%02d-%02d", year, month(), day)
+    local minMonth = year == 2025 and 8 or 1
+    local maxMonth = year == 2025 and 12 or 6
+
+    return ("%04d-%02d-%02d"):format(
+        year,
+        math.random(minMonth, maxMonth),
+        math.random(1, 28)
+    )
 end
 
 local function randomTime()
-    return string.format(
-        "%02d:%02d:%02d",
+    return ("%02d:%02d:%02d"):format(
         math.random(0, 23),
         math.random(0, 59),
         math.random(0, 59)
