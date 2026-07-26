@@ -1,3 +1,11 @@
+-- This script is designed to simulate a Steam History ban message in the chat when the local player 
+-- initiates a kick vote. It detects when a vote starts and then sends a message in chat with a fake
+-- steamhistory.com link, the target player's name, and a random ban date and time.
+--
+-- It also contains commented out code for logging vote events, catching vote pass/fail events,
+-- and tracking votes that I used for testing. I left it in for anyone that knows what they're doing
+-- and wants to use it for their own purposes. 
+
 local votes = {}
 
 --[[
