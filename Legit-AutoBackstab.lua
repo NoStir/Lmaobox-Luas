@@ -19,7 +19,7 @@ local function findClosestTarget(me, players)
     return closestTarget
 end
 
-local function backstabAimbot(cmd)
+local function backstab(cmd)
     local me = entities.GetLocalPlayer()
     if not me:IsValid() or not me:IsAlive() or me:GetPropInt("m_iClass") ~= 8 or me:InCond(TFCond_Cloaked) then
         target = nil
@@ -45,4 +45,4 @@ local function backstabAimbot(cmd)
     end
 end
 
-callbacks.Register("CreateMove", "backstabAimbot", backstabAimbot)
+callbacks.Register("CreateMove", "backstab", backstab)

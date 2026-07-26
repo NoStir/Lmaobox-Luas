@@ -9,10 +9,6 @@
     lmaobox forums @ TimLeary
 
     13 July 2025
-
-    Public Release v1.0
-
-    All rights relinquished to the public domain
 ]]
 
 local me = entities.GetLocalPlayer()

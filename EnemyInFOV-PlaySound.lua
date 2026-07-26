@@ -1,30 +1,11 @@
--- Cache necessary lmaobox libraries
-local entities = entities
-local callbacks = callbacks
-local gui = gui
-local engine = engine
-local vector = vector
-local math = math
-local globals = globals
-local printc = printc
-local Vector3 = Vector3
 
---
---
---
-
-local function customAction()
-    -- Custom action to be performed when a target is in FOV
-    -- For example, play a sound
+local function playSound()
     engine.PlaySound("ui/buttonclick.wav")
 end
---
---
---
 
 local wasTargetInFov = false
 local lastCheckTime = 0
-local CHECKS_PER_SECOND = 10
+local CHECKS_PER_SECOND = 33
 local checkInterval = 1 / CHECKS_PER_SECOND
 
 local function main_logic()
@@ -78,7 +59,7 @@ local function main_logic()
     end
 
     if isTargetInFovThisFrame and not wasTargetInFov then
-        customAction()
+        playSound()
     end
 
     wasTargetInFov = isTargetInFovThisFrame
