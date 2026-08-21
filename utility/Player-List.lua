@@ -1,9 +1,17 @@
---[[
-    Player Tracker HUD
-
-    Maintains a player list using connect/disconnect events and refreshes
-    the displayed position data periodically.
-]]
+--===============================================================
+--
+-- # Discord
+-- @ purrspire
+--
+-- # GitHub
+-- @ NoStir
+--
+-- # Lbox forums
+-- @ TimLeary
+--
+-- Maintains a player list using connect/disconnect events
+--
+--===============================================================
 
 local hudStartX = 10
 local hudStartY = 150

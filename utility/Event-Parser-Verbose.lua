@@ -641,6 +641,7 @@ local function onGameEvent(event)
 
     if params then
         -- Event is known, print its name and parameters
+        engine.PlaySound("ui/hint.wav")
         printc(COLOR_EVENT_NAME[1], COLOR_EVENT_NAME[2], COLOR_EVENT_NAME[3], 255, "--- Event Fired: " .. eventName .. " ---")
         if #params == 0 then
             printc(COLOR_VALUE[1], COLOR_VALUE[2], COLOR_VALUE[3], 255, "  (No parameters defined for this event)")

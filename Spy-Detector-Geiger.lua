@@ -1,14 +1,16 @@
---[[
-    ==========================================================================
-    Advanced Spy Radar & Audio Configurator
-    Version: 2.5.0
-
-    Lmaobox Lua APIs used by this script are documented in:
-    - Lua_Callbacks.md: Draw, CreateMove, Unload
-    - libraries/entities.md and classes/Entity.md
-    - libraries/draw.md, input.md, engine.md, gui.md, client.md
-    ==========================================================================
-]]
+--===============================================================
+--
+-- # Discord
+-- @ purrspire
+--
+-- # GitHub
+-- @ NoStir
+--
+-- # Lbox forums
+-- @ TimLeary
+--
+--
+--===============================================================
 
 -- ==========================================================================
 -- 1. SOUND DATABASE
@@ -65,9 +67,9 @@ local DEFAULT_SETTINGS = {
     ShowMeter = true,
     MeterStyle = 1,
     ShowDetails = true,
-    ShowDirection = true,
+    ShowDirection = false,
     ShowTargetMarker = false,
-    ShowGroundGlow = false,
+    ShowGroundCircle = false,
     AlertOnRangeEnter = true,
     MuteWhileMenuOpen = false,
     HighResUI = isHighRes,
@@ -94,7 +96,7 @@ local CONFIG_KEYS = {
     "ShowDetails",
     "ShowDirection",
     "ShowTargetMarker",
-    "ShowGroundGlow",
+    "ShowGroundCircle",
     "AlertOnRangeEnter",
     "MuteWhileMenuOpen",
     "HighResUI",
@@ -1006,7 +1008,7 @@ local function DrawHUDMeter(scale)
 end
 
 local function DrawSpyGroundGlow(scale)
-    if not Settings.ShowGroundGlow or not Radar.spies or #Radar.spies == 0 then
+    if not Settings.ShowGroundCircle or not Radar.spies or #Radar.spies == 0 then
         return
     end
 
@@ -1166,7 +1168,7 @@ local function DrawMenu(scale)
 
     draw.SetFont(fonts.title)
     draw.Color(255, 255, 255, 255)
-    draw.Text(bx + math.floor(10 * scale), by + math.floor(7 * scale), "Spy Detection Module | " .. VERSION .. FormatModeName(Settings.Mode))
+    draw.Text(bx + math.floor(10 * scale), by + math.floor(7 * scale), "Spy Detection Module | " .. VERSION .. "  " .. FormatModeName(Settings.Mode))
 
     local closeHovered = UI.canInteract and MouseInBounds(Inp.mx, Inp.my, bx + scaledW - titleBarH, by, titleBarH, titleBarH)
     draw.Color(closeHovered and 255 or r, closeHovered and 255 or g, closeHovered and 255 or b, closeHovered and 70 or 255)
@@ -1336,12 +1338,12 @@ local function DrawMenu(scale)
     DrawCheckbox(col2, currentY, "Direction Indicator", "ShowDirection", math.floor(190 * scale))
     currentY = currentY + rowH
     DrawCheckbox(col1, currentY, "Target Marker", "ShowTargetMarker", math.floor(170 * scale))
-    DrawCheckbox(col2, currentY, "Spy Ground Glow", "ShowGroundGlow", math.floor(180 * scale))
+    DrawCheckbox(col2, currentY, "Spy Ground Circle", "ShowGroundCircle", math.floor(180 * scale))
     currentY = currentY + rowH
     DrawCheckbox(col1, currentY, "Range Alert", "AlertOnRangeEnter", math.floor(170 * scale))
     DrawCheckbox(col2, currentY, "Mute While Menu Open", "MuteWhileMenuOpen", math.floor(205 * scale))
     currentY = currentY + rowH
-    DrawCheckbox(col1, currentY, "High Res Scaling", "HighResUI", math.floor(170 * scale))
+    DrawCheckbox(col1, currentY, "1440p/4K Scaling", "HighResUI", math.floor(170 * scale))
     currentY = currentY + math.floor(28 * scale)
 
     local buttonW = math.floor(108 * scale)

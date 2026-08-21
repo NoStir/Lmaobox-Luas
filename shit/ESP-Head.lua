@@ -9,7 +9,7 @@ local espSettings = {
     basePixelSize = 6,
 
     unzoomed_distanceMin = 200,
-    unzoomed_scaleAtMinDistance = 2.0,
+    unzoomed_scaleAtMinDistance = 4.0,
     unzoomed_distanceMax = 2500,
     unzoomed_scaleAtMaxDistance = 0.4,
     unzoomed_absoluteMinPixelSize = 2,

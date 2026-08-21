@@ -1,3 +1,16 @@
+--===============================================================
+--
+-- # Discord
+-- @ purrspire
+--
+-- # GitHub
+-- @ NoStir
+--
+-- # Lbox forums
+-- @ TimLeary
+--
+--
+--===============================================================
 -- Variables to manage noisemaker toggling
 local noisemakerEndTime = 0
 

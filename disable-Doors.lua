@@ -1,3 +1,17 @@
+--===============================================================
+--
+-- # Discord
+-- @ purrspire
+--
+-- # GitHub
+-- @ NoStir
+--
+-- # Lbox forums
+-- @ TimLeary
+--
+--
+--===============================================================
+
 local toggleState = false
 local last_tick = 0
 
@@ -30,3 +44,10 @@ callbacks.Register("CreateMove", function()
         last_tick = tick
     end
 end)
+
+callbacks.Register("Unload", function()
+    -- Reset the material flag when the script is unloaded
+    toggleDraw(false)
+end)
+
+toggleDraw(true)

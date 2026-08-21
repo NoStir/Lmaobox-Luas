@@ -1,9 +1,24 @@
--- This script detects when the local player initiates a kick vote and then sends a message in chat
--- with a fake steamhistory.com link, the target player's name, and a random ban date and time.
+--===============================================================
 --
--- It also contains commented out code for logging vote events, catching vote pass/fail events,
--- and tracking votes that I used for testing. I left it in for anyone that knows what they're doing
--- and wants to use it for their own purposes. 
+-- # Discord
+-- @ purrspire
+--
+-- # GitHub
+-- @ NoStir
+--
+-- # Lbox forums
+-- @ TimLeary
+--
+-- This script detects when the local player initiates a kick
+-- vote and then sends a message in chat with a fake steamhistory
+-- link, the target player's name, and a random ban date and time.
+--
+-- It also contains commented out code for logging vote events,
+-- catching vote pass/fail events, and tracking votes that I used
+-- for testing. I left it in for anyone that knows what they're
+-- doing and wants to use it for their own purposes. 
+--
+--===============================================================
 
 local votes = {}
 

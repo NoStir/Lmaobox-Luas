@@ -1,3 +1,16 @@
+--===============================================================
+--
+-- # Discord
+-- @ purrspire
+--
+-- # GitHub
+-- @ NoStir
+--
+-- # Lbox forums
+-- @ TimLeary
+--
+--
+--===============================================================
 local key = "L" -- replace * with appropriate E_ButtonCode, for example: "key = "F"
 
 local mTargetCache = {}
