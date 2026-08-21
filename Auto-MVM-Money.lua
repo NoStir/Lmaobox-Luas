@@ -1,332 +1,449 @@
-local debug = false
-
--- Core variables
-local observed_upgrades_count = 0
-local confirmed_upgrades_request, sent_upgrades_request, step, clock, grace, objResource
-local me, playingMVM, broke, inUpgradeZone, midpoint, inSpawn
-local enabled = true
-local waveActive = false
-local screenSize = {x = 0, y = 0}
-screenSize.x, screenSize.y = draw.GetScreenSize()
-
-draw.SetFont(draw.CreateFont("Tahoma", 16, 800))
-
--- Core functions
-local function begin_upgrade()
-    assert(engine.SendKeyValues('"MvM_UpgradesBegin" {}'))
-    observed_upgrades_count = observed_upgrades_count + 1
-end
-
-local function end_upgrade(num_upgrades)
-    num_upgrades = num_upgrades or 0
-    assert(engine.SendKeyValues('"MvM_UpgradesDone" { "num_upgrades" "' .. num_upgrades .. '" }'))
-    observed_upgrades_count = observed_upgrades_count - 1
-end
-
-local function respec_upgrades()
-    assert(engine.SendKeyValues('"MVM_Respec" {}'))
-end
-
-local function mvm_upgrade_weapon(itemslot, upgrade, count)
-    assert(engine.SendKeyValues('"MVM_Upgrade" { "Upgrade" { "itemslot" "' .. itemslot .. '" "Upgrade" "' .. upgrade .. '" "count" "' .. count .. '" } }'))
-end
-
-local function reset()
-    confirmed_upgrades_request = 0
-    sent_upgrades_request = 0
-    step = 1
-    clock = 0
-    grace = true
-end
-
-local phase = {
-    function()
-        begin_upgrade()
-        mvm_upgrade_weapon(1, 19, 1)
-        mvm_upgrade_weapon(1, 19, 1)
-        end_upgrade(2)
-    end,
-    function()
-        begin_upgrade()
-        mvm_upgrade_weapon(1, 19, -1)
-        mvm_upgrade_weapon(1, 19, 1)
-        respec_upgrades()
-        end_upgrade(-1)
-    end,
-    function()
-        begin_upgrade()
-        mvm_upgrade_weapon(1, 19, 1)
-        mvm_upgrade_weapon(1, 19, 1)
-        mvm_upgrade_weapon(1, 19, -1)
-        mvm_upgrade_weapon(1, 19, -1)
-        end_upgrade(0)
-    end
-}
-
-local function BetweenWaves()
-    if not objResource or objResource:IsValid() then
-        for i = 0, entities.GetHighestEntityIndex() do
-            local entity = entities.GetByIndex(i)
-            if entity and entity:GetClass() == "CTFObjectiveResource" then
-                objResource = entity
-                break
-            end
-        end
-    end
-    if objResource and objResource:GetPropBool("m_bMannVsMachineBetweenWaves") then
-        waveActive = false
-    elseif objResource and not objResource:GetPropBool("m_bMannVsMachineBetweenWaves") then
-        waveActive = true
-    end
-    return objResource:GetPropBool("m_bMannVsMachineBetweenWaves")
-end
-
-local function check_prerequisites()
-    local server_allowed_respec = client.GetConVar('tf_mvm_respec_enabled') == 1
-    return server_allowed_respec and inUpgradeZone and playingMVM and BetweenWaves() and broke and enabled
-end
-
-local function exec_main()
-    if clock > globals.CurTime() then return end
-
-    if confirmed_upgrades_request < sent_upgrades_request then
-        if grace then
-            grace = false
-        else
-            confirmed_upgrades_request = 0
-            sent_upgrades_request = 0
-        end
-    end
-
-    if step == 4 then
-        step = 1
-    else
-        phase[step]()
-        step = step + 1
-        grace = true
-    end
-
-    clock = globals.CurTime() + clientstate.GetLatencyOut()
-end
-
-callbacks.Register("PostPropUpdate", function()
-    if check_prerequisites() then
-        exec_main()
-    end
-end)
-
-callbacks.Register("FireGameEvent", function(event)
-    if event:GetName() == "game_newmap" then
-        reset()
-    end
-end)
-
-reset()
-
-local function TextMsg(hud_type, text)
-    if text == '#TF_MVM_NoClassUpgradeUI' then
-        client.ChatPrintf("[Buy Bot] It seems like you can't change class, try again")
-        if attempt_balance_upgrades_count() then
-            observed_upgrades_count = observed_upgrades_count + 1
-            attempt_balance_upgrades_count()
-        end
-    end
-end
-
-local user_message_triggers = {
-    [5] = function(UserMessage)
-        local hud_type = UserMessage:ReadByte()
-        local text = UserMessage:ReadString(256)
-        TextMsg(hud_type, text)
-    end,
-    [60] = function(UserMessage)
-        local player_index = UserMessage:ReadByte()
-        local current_wave = UserMessage:ReadByte()
-        local itemdefinition = UserMessage:ReadInt(16)
-        local attributedefinition = UserMessage:ReadInt(16)
-        local quality = UserMessage:ReadByte()
-        local credit_cost = UserMessage:ReadInt(16)
-    end,
-    [64] = function(UserMessage)
-        local mercenary = UserMessage:ReadByte()
-        local itemdefinition = UserMessage:ReadInt(16)
-        local upgrade = UserMessage:ReadByte()
-        local credit_cost = UserMessage:ReadInt(16)
-        confirmed_upgrades_request = confirmed_upgrades_request + 1
-    end,
-    [66] = function(UserMessage)
-        local steamID64 = UserMessage:ReadInt(64)
-        local current_wave = UserMessage:ReadByte()
-        local mvm_event_type = UserMessage:ReadByte()
-        local credit_cost = UserMessage:ReadInt(16)
-    end,
-}
-
-callbacks.Register("DispatchUserMessage", function(UserMessage)
-    local id = UserMessage:GetID()
-    if user_message_triggers[id] then
-        user_message_triggers[id](UserMessage)
-    end
-end)
-
-callbacks.Register("FireGameEvent", function(event)
-    if event:GetName() == "mvm_begin_wave" then
-        enabled = false
-    end
-end)
-
-local function FindUpgradeStations()
-    draw.Color(255, 255, 255, 255)
-
-    if me == nil then
-        me = entities.GetLocalPlayer()
-        if not me then
-            return
-        end
-    end
-
-    playingMVM = gamerules.IsMvM()
-    if not playingMVM then
-        return
-    end
-
-    if me:IsAlive() then
-        broke = me:GetPropInt('m_nCurrency') < 10000
-        inUpgradeZone = me:GetPropBool("m_bInUpgradeZone")
-        if not broke or not BetweenWaves() then
-            return
-        end
-    end
-
-    if inSpawn == nil then
-        inSpawn = 1
-    end
-
-    if not inSpawn then
-        return
-    end
-
-    local myPos = me:GetAbsOrigin()
-    local upgradeSigns = {}
-    local max_entities = entities.GetHighestEntityIndex()
-    for i = 0, max_entities do
-        local entity = entities.GetByIndex(i)
-        if entity and entity:GetClass() == "CDynamicProp" then
-            local modelName = models.GetModelName(entity:GetModel())
-            if modelName == "models/props_mvm/mvm_upgrade_sign.mdl" then
-                local entityPos = entity:GetAbsOrigin()
-                if entityPos then
-                    local entityDistance = vector.Length(vector.Subtract(entityPos, myPos))
-                    if entityDistance < 5000 then
-                        table.insert(upgradeSigns, {pos = entityPos, distance = entityDistance})
-                    end
-                end
-            end
-        end
-    end    
-
-    -- Sort by distance from the player
-    table.sort(upgradeSigns, function(a, b) return a.distance < b.distance end)
-
-    if #upgradeSigns >= 2 then
-        local pos1 = upgradeSigns[1].pos
-        local closestDistance = math.huge
-        local pos2
-
-        -- Find the nearest sign to the first nearest sign
-        for i = 2, #upgradeSigns do
-            local pos = upgradeSigns[i].pos
-            local distance = vector.Length(vector.Subtract(pos, pos1))
-            if distance < closestDistance then
-                closestDistance = distance
-                pos2 = pos
-            end
-        end
-
-        if pos2 then
-            midpoint = Vector3(
-                (pos1.x + pos2.x) / 2,
-                (pos1.y + pos2.y) / 2,
-                (pos1.z + pos2.z) / 2
-            )
-
-            local screenPos = client.WorldToScreen(midpoint)
-            if screenPos and debug then
-                draw.Text(screenPos[1], screenPos[2], string.format("Midpoint: %.f, %.f, %.f", midpoint.x, midpoint.y, midpoint.z))
-            end
-        end
-    end
-end
-
-callbacks.Register("Draw", FindUpgradeStations)
-
-callbacks.Register("FireGameEvent", function(event)
-    local eventname = event:GetName()
-    if eventname == "player_spawn" then
-        local spawnID = event:GetInt("userid")
-        local myIndex = client.GetLocalPlayerIndex()
-        local pInfo = client.GetPlayerInfo(myIndex)
-        local myID = pInfo["UserID"]
-        if spawnID == myID then
-            inSpawn = 1
-        end
-    end
-end)
-
-local function info()
-    if not debug then return end
-    local drawPOS = {x = screenSize.x * 0.05, y = screenSize.y * 0.20}
-    local moveFactorY = screenSize.y * 0.05
-    local moveFactorX = screenSize.x * 0.15
-    local info = {
-        "Spawned: " .. tostring(inSpawn),
-        "Playing MVM: " .. tostring(playingMVM),
-        "Broke: " .. tostring(broke),
-        "In Upgrade Zone: " .. tostring(inUpgradeZone)
-    }
-    local maxY = screenSize.y * 0.80
-
-    for _, log in ipairs(info) do
-        draw.Text(drawPOS.x, drawPOS.y, log)
-        drawPOS.y = drawPOS.y + moveFactorY
-
-        if drawPOS.y > maxY then
-            drawPOS.y = screenSize.y * 0.20
-            drawPOS.x = drawPOS.x + moveFactorX
-        end
-    end
-end
-
-
-callbacks.Register("Draw", info)
-
-local function ComputeMove(userCmd, a, b)
-    local diff = (b - a)
-    if diff:Length() == 0 then return Vector3(0, 0, 0) end
-
-    local x = diff.x
-    local y = diff.y
-    local vSilent = Vector3(x, y, 0)
-
-    local ang = vSilent:Angles()
-    local cPitch, cYaw, cRoll = userCmd:GetViewAngles()
-    local yaw = math.rad(ang.y - cYaw)
-    local pitch = math.rad(ang.x - cPitch)
-    local move = Vector3(math.cos(yaw) * 450, -math.sin(yaw) * 450, -math.cos(pitch) * 450)
-
-    return move
-end
-
-function WalkTo(userCmd, me, destination)
-    local myPos = me:GetAbsOrigin()
-    local result = ComputeMove(userCmd, myPos, destination)
-
-    userCmd:SetForwardMove(result.x)
-    userCmd:SetSideMove(result.y)
-end
-
-callbacks.Register("CreateMove", function(cmd)
-    if (inSpawn == 1 or nil) and broke and not inUpgradeZone and waveActive == false and midpoint then
-        WalkTo(cmd, me, midpoint)
-    end
-end)
+---------   /------   /-------  //-------  /-------   /------   /-------  /-------\  /-------   /------   /-------  /-------   /------- 
+--      XXXX       XXXX      \XXX       XXX/      XXXX       XXXX      \XXX       XXX/      XXXX      \XXX/      XXXX       XXX       XX
+--\\  ///  \\\\ ////  \\\  ///  \\\   ///  \\\  ///  \\\\ ////  \\\  ///  \\\   ///  \\\  ///  \\\\ ///   \\\  ///  \\\  //// \\\\  /// 
+-- /XXX       XXX       XXXX      /XXX\      XXXX       XXX       XXXX      /XXX\      XXXX      /XXX       XXX\      XXXX       XXXX   
+----  \-------   \-------  \\------   \-------  \-------   \-------  \-------   \------/  \-------  \\-------  \-------   \------   \---
+--
+--             ######    ##      ##  ##########    ######          ##      ##    ######    ##      ##  ##########  ##      ##
+--           ##      ##  ##      ##      ##      ##      ##        ####  ####  ##      ##  ####    ##  ##            ##  ##
+--           ##########  ##      ##      ##      ##      ##        ##  ##  ##  ##      ##  ##  ##  ##  ########        ##
+--           ##      ##  ##      ##      ##      ##      ##        ##      ##  ##      ##  ##    ####  ##              ##
+--           ##      ##    ######        ##        ######          ##      ##    ######    ##      ##  ##########      ##
+--
+--                                    Mann vs. Machine  ~  bench walker + upgrade-cycle credit farm
+--                                    Discord @ purrspire
+--                                    GitHub @ NoStir
+--                                    Lbox Forums @ TimLeary
+--
+---------   /------   /-------  //-------  /-------   /------   /-------  /-------\  /-------   /------   /-------  /-------   /------- 
+--      XXXX       XXXX      \XXX       XXX/      XXXX       XXXX      \XXX       XXX/      XXXX      \XXX/      XXXX       XXX       XX
+--\\  ///  \\\\ ////  \\\  ///  \\\   ///  \\\  ///  \\\\ ////  \\\  ///  \\\   ///  \\\  ///  \\\\ ///   \\\  ///  \\\  //// \\\\  /// 
+-- /XXX       XXX       XXXX      /XXX\      XXXX       XXX       XXXX      /XXX\      XXXX      /XXX       XXX\      XXXX       XXXX   
+----  \-------   \-------  \\------   \-------  \-------   \-------  \-------   \------/  \-------  \\-------  \-------   \------   \---
+--=====================================================================================================================================+
+----  __    ___     ___ -----  ---------  ---------  ---------  ---------  ---------  ---------  ---------  ---  __    ___     ___ -----
+--   /_ |  / _ \   / _ \    XXXX       -XXX       .-----------------------------------.       XXX-       /XXX   /_ |  / _ \   / _ \
+-- /  | | | | | | | | | | ///   \\\ ///   \\\\ /  | MANN  CO.  FEDERAL  RESERVE  NOTE |  \ ////   \\\ ///   \\\  | | | | | | | | | | \
+--XX  | | | | | | | | | |         XXX        XXX  '-----------------------------------'  XXX        XXX          | | | | | | | | | | XXX
+-- \  | | | |_| | | |_| | \\\   /// \\\   //// \\\\   /// \\\   //// \\\\   /// \\\   //// \\\\   /// \\\   ///  | | | |_| | | |_| | /
+--    |_|  \___/   \___/    XXXX      THIS NOTE IS LEGAL TENDER FOR ALL UPGRADES PUBLIC AND PRIVATE      -XXX    |_|  \___/   \___/
+-------  ---------  ---------  ---------  ---------  ---------  ---------  ---------  ---------  ---------  ---------  ---------  ------
+-- MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANN =+
+ --[[|  X  |]]local DEBUG=true local FONT=draw.CreateFont("Tahoma",16,800)local SCREEN_W,SCREEN_H=draw.GetScreenSize()local   --||    ||
+ --[[| |X| |]]UPGRADE_SIGN_MDL="models/props_mvm/mvm_upgrade_sign.mdl"local SIGN_SEARCH_RANGE=5000 local ARRIVE_RANGE=48      --||    ||
+ --[[||| |||]]local CREDIT_FLOOR=100 local FARM_TARGET=10000 local SCAN_INTERVAL=1.0 local MOVE_SPEED=450 local               --|||  |||
+ --[[||   ||]]MIN_PHASE_INTERVAL=0.2 local function EnumValue(bare,tbl,key,fallback)if bare~=nil then return bare end if      --| |  | |
+ --[[||   ||]]type(tbl)=="table"and tbl[key]~=nil then return tbl[key]end return fallback end local FLOW_OUT=EnumValue(       --|  \/  |
+ --[[||   ||]]FLOW_OUTGOING,E_Flows,"FLOW_OUTGOING",0)local STAGE_WANT=EnumValue(FRAME_NET_UPDATE_POSTDATAUPDATE_END,         --|  /\  |
+ --[[| | | |]]E_ClientFrameStage,"FRAME_NET_UPDATE_POSTDATAUPDATE_END",3)local TOGGLE_KEY=EnumValue(KEY_F6,E_ButtonCode,      --| /  \ |
+ --[[| |X| |]]"KEY_F6",97)local TOGGLE_KEY_NAME="F6"local objResource local gameRulesProxy     -------------                    |||  |||
+ --[[| /X\ |]]local midpoint local nextScan=0 local state={updates=0,mvm=false,mvmVia="-" --/--///--     ---\\---               ||    ||
+ --[[| | | |]],alive=false,betweenWaves=false,wave=0,currency=0,inUpgradeZone=false,   --///////             \\\\\\\            ||    ||
+ --[[||   ||]]zonePath=0,inSpawn=false,signs=0,pumps=0,execs=0,sends=0,fsnFires=0,  --//---------           ---\\----\\         |||  |||
+ --[[||   ||]]fsnStage=nil,lastError=nil,kvFails=0,lastKVResult=nil,lastKVFail=   --////-  || //-\\\-\X//////-\ \|  -\\\\       | \\// |
+ --[[||   ||]]nil,externalKV=0,objResVia="-",objResIdx=-1,proxyVia="-",props=0,  --///     ||//    \\ X |/    \\\|     \\\      |  XX  |
+ --[[||| |||]]propsVia="-",rawBetween=nil,rawWave=nil,}local enabled=true local --//       ||       |   |       ||       \\     | //\\ |
+ --[[| | | |]]waveActive=false local LOG_DIR="lmaobox_logs"local LOG_NAME=     --||     //-+\+     /|   \\     X++--\     \|    ||/  \||
+ --[[|  X  |]]"mvm_upgrade_walk.log"local LOG_REPEAT_SEC=5 local logPath,     --||     |/    \----//     \----//    \\     ||   ||    ||
+ --[[| /X\ |]]logReady,logFail local lastLogged={}local function Stamp()if os --||    |-----        ,-|-.        ---- |    ||   ||    ||
+ --[[||| |||]]and os.date then local ok,s=pcall(os.date,"%Y-%m-%d %H:%M:%S")  --||| ///+   --\\    (  |       ///-   ++\\ |||   |||  |||
+ --[[||   ||]]if ok and s then return s end end return string.format("t+%.1f" --| \//  \X-+   \     '-|-.     |   +--/  \\| |   | |  | |
+ --[[||   ||]],globals.CurTime())end local function InitLog()if type(io)~=    --| |\\  /X-+   |        | )    \   +-X\  //\ |   | \\// |
+ --[[||   ||]]"table"or not io.open then logFail="runtime has no io.open"     --||| \\++   -///     '--|-'    \\--   +/// |||   |  XX  |
+ --[[| | | |]]return end local gotDir,dir=pcall(engine.GetGameDir)if not      --||    | ----                     ---- |    ||   | //\\ |
+ --[[| |X| |]]gotDir or type(dir)~="string"or dir==""then logFail=            --||    |\\    //----\     //----\    /|     ||   |||  |||
+ --[[| |X| |]]"no game dir ("..tostring(dir)..")"return end local full=dir..   --|\     \--++X      \   |      X\+-//     ||    ||    ||
+ --[[| | | |]]"\\"..LOG_DIR if filesystem and filesystem.CreateDirectory then   --\\       ||       |   |       ||       //     ||    ||
+ --[[||| |||]]pcall(filesystem.CreateDirectory,full)end logPath=full.."\\"..     --\\\     |\\\    /| X \\    //||     ///      |||  |||
+ --[[||   ||]]LOG_NAME local fh=io.open(logPath,"a")if not fh then logPath=dir..  --\\\--  |\ \-//////X\-\\\-// ||  ////        | \\// |
+ --[[||   ||]]"\\"..LOG_NAME fh=io.open(logPath,"a")if not fh then logFail=         --\\----\\---           ---------//         |  XX  |
+ --[[||| |||]]"cannot open log for append"return end end fh:close()logReady=true end   --\\\\\\\             ///////            | //\\ |
+ --[[| | | |]]local Snapshot local function Log(key,msg)if not logReady then return end   -----\\---     --///--/               ||/  \||
+ --[[|  X  |]]if key then local now=globals.CurTime()local prev=lastLogged[key]if prev and(now -------------                    ||    ||
+ --[[| /X\ |]]-prev)<LOG_REPEAT_SEC and now>=prev then return end lastLogged[key]=now end local fh=io.open(logPath,"a")if not --||    ||
+ --[[||| |||]]fh then return end fh:write(Stamp(),"  ",tostring(msg),"\n")fh:close()end local function ResetMapState()        --||    ||
+ --[[||   ||]]objResource=nil gameRulesProxy=nil midpoint=nil nextScan=0 state.signs=0 waveActive=false end local function    --| |  | |
+ --[[||   ||]]PropFlag(ent,name)local v=ent:GetPropBool(name)if v==nil then v=ent:GetPropInt(name)end return v==true or v==1  --| \\// |
+ --[[||   ||]]end local UPGRADE_ZONE_PATHS={{"m_bInUpgradeZone"},{"m_Shared","m_bInUpgradeZone"},{"m_Shared",                 --|  XX  |
+ --[[||| |||]]"tfsharedlocaldata","m_bInUpgradeZone"},}local unpack=table.unpack or unpack local function ReadUpgradeZone(ent --| //\\ |
+ --[[| |X| |]])for i=1,#UPGRADE_ZONE_PATHS do local p=UPGRADE_ZONE_PATHS[i]local v=ent:GetPropBool(unpack(p))if v==nil then v --|||  |||
+ --[[| /X\ |]]=ent:GetPropInt(unpack(p))end if v~=nil then return(v==true or v==1),i end end return false,0 end local         --||    ||
+ --[[| | | |]]function ForEachOfClass(className,fn)local count=0 local found=entities.FindByClass(className)if type(found)==  --||    ||
+-- MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANN =+
+----  __    ___     ___ ---------  ---------  ---------  .----------------------.  ----   ---------  --------    __    ___     ___    --
+--   /_ |  / _ \   / _ \        -XX\      /XXX-       X  | ONE HUNDRED  CREDITS |     /XXX-       XXX\      /XX /_ |  / _ \   / _ \ XX-
+--\\  | | | | | | | | | | \  ///   \\\  ///   \\\  ///   '----------------------'   ///   \\\  ///   \\\  ///    | | | | | | | | | |  \\
+--    | | | | | | | | | | XXXX        XXX       XXXX        XXX       XXXX        XXX       XXXX        XXX      | | | | | | | | | |
+--//  | | | |_| | | |_| | /  \\\   ///  \\  No. MVM-000001        Treasurer:  ~~Saxton~Hale~~  \\\   ///  \\\    | | | |_| | | |_| |  //
+--    |_|  \___/   \___/        XXX/      \XXX-       -XX/      \XXX-       XXX/      \XXX-       -XX/      \XX  |_|  \___/   \___/ XX-
+-----------  ---------  ---------  ---------  ---------  --------   ---------  --------   ---------  --------   ---------  --------   --
+--=====================================================================================================================================+
+--
+--=====================================================================================================================================+
+----  ___     ___     ___ ---  ---------  ---------  ---------  ---------  ---------  ---------  ---------  -  ___     ___     ___ -----
+--   |__ \   / _ \   / _ \  XXXX       -XXX       .-----------------------------------.       XXX-       /XXX |__ \   / _ \   / _ \
+-- /    ) | | | | | | | | | /   \\\ ///   \\\\ /  | MANN  CO.  FEDERAL  RESERVE  NOTE |  \ ////   \\\ ///   \    ) | | | | | | | | | \
+--XX   / /  | | | | | | | |       XXX        XXX  '-----------------------------------'  XXX        XXX         / /  | | | | | | | | XXX
+-- \  / /_  | |_| | | |_| | \   /// \\\   //// \\\\   /// \\\   //// \\\\   /// \\\   //// \\\\   /// \\\   /  / /_  | |_| | | |_| | /
+--   |____|  \___/   \___/  XXXX      THIS NOTE IS LEGAL TENDER FOR ALL UPGRADES PUBLIC AND PRIVATE      -XXX |____|  \___/   \___/
+-------  ---------  ---------  ---------  ---------  ---------  ---------  ---------  ---------  ---------  ---------  ---------  ------
+-- MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANN =+
+ --[[|  X  |]]"table"then for _,ent in pairs(found)do if ent and ent:IsValid()then count=count+1 fn(ent)end end end if count> --||    ||
+ --[[| /X\ |]]0 then return count,"fbc"end for i=0,entities.GetHighestEntityIndex()do local ent=entities.GetByIndex(i)if ent  --||    ||
+ --[[| | | |]]and ent:IsValid()and ent:GetClass()==className then count=count+1 fn(ent)end end return count,(count>0)and      --||    ||
+ --[[||   ||]]"scan"or"none"end local function FindFirstValid(className,cache)if cache and cache:IsValid()then return cache,  --|||  |||
+ --[[||   ||]]"cache"end local first local _,via=ForEachOfClass(className,function(ent)if not first then first=ent end end)   --| \\// |
+ --[[||   ||]]return first,via end local function DetectMvM()gameRulesProxy,state.proxyVia=FindFirstValid("CTFGameRulesProxy" --|  XX  |
+ --[[||| |||]],gameRulesProxy)if gameRulesProxy and PropFlag(gameRulesProxy,"m_bPlayingMannVsMachine")then return true,"prop" --| //\\ |
+ --[[| | | |]]end if gamerules.IsMvM()then return true,"gamerules"end local map=engine.        -------------                    ||/  \||
+ --[[|  X  |]]GetMapName()if type(map)=="string"and map:lower():find("mvm_",1,true)then   --/--///--     ---\\---               ||    ||
+ --[[| /X\ |]]return true,"mapname"end return false,"-"end local function              --///////             \\\\\\\            ||    ||
+ --[[||| |||]]ScanUpgradeSigns(myPos)local signs={}local props,via=ForEachOfClass(  --//---------           ---\\----\\         |||  |||
+ --[[||   ||]]"CDynamicProp",function(prop)local mdl=prop:GetModel()if mdl and    --////-  || //-\\\-\X//////-\ \|  -\\\\       | |  | |
+ --[[||   ||]]models.GetModelName(mdl)==UPGRADE_SIGN_MDL then local pos=prop:    --///     ||//    \\ X |/    \\\|     \\\      | \\// |
+ --[[||   ||]]GetAbsOrigin()if pos then local dist=vector.Distance(pos,myPos)if --//       ||       |   |       ||       \\     |  XX  |
+ --[[| | | |]]dist<SIGN_SEARCH_RANGE then signs[#signs+1]={pos=pos,distance=   --||     //-+\+     /|   \\     X++--\     \|    | //\\ |
+ --[[| |X| |]]dist}end end end end)state.props=props state.propsVia=via table --||     |/    \----//     \----//    \\     ||   |||  |||
+ --[[| |X| |]].sort(signs,function(a,b)return a.distance<b.distance end)      --||    |-----        ,-|-.        ---- |    ||   ||    ||
+ --[[| | | |]]return signs end local function UpdateMidpoint(myPos)local      --||| ///+   --\\    (  |       ///-   ++\\ |||   ||    ||
+ --[[||| |||]]signs=ScanUpgradeSigns(myPos)state.signs=#signs if#signs==0     --| \//  \X-+   \     '-|-.     |   +--/  \\| |   |||  |||
+ --[[||   ||]]then midpoint=nil return end if#signs==1 then midpoint=signs[1] --| |\\  /X-+   |        | )    \   +-X\  //\ |   | \\// |
+ --[[||   ||]].pos return end local first=signs[1].pos local partner,bestDist --||| \\++   -///     '--|-'    \\--   +/// |||   |  XX  |
+ --[[||| |||]]=nil,math.huge for i=2,#signs do local dist=vector.Distance(    --||    | ----                     ---- |    ||   | //\\ |
+ --[[| | | |]]signs[i].pos,first)if dist<bestDist then bestDist,partner=dist, --||    |\\    //----\     //----\    /|     ||   ||/  \||
+ --[[|  X  |]]signs[i].pos end end if partner then midpoint=Vector3((first.x+  --|\     \--++X      \   |      X\+-//     ||    ||    ||
+ --[[| /X\ |]]partner.x)/2,(first.y+partner.y)/2,(first.z+partner.z)/2)else     --\\       ||       |   |       ||       //     ||    ||
+ --[[||| |||]]midpoint=first end end local function HasBenchBusiness()if enabled --\\\     |\\\    /| X \\    //||     ///      ||    ||
+ --[[||   ||]]then return state.currency<FARM_TARGET end return state.currency>=  --\\\--  |\ \-//////X\-\\\-// ||  ////        | |  | |
+ --[[||   ||]]CREDIT_FLOOR end local function WalkBlockReason()if not state.mvm     --\\----\\---           ---------//         | \\// |
+ --[[||   ||]]then return"not MvM"end if not state.alive then return"dead"end if not   --\\\\\\\             ///////            |  XX  |
+ --[[||| |||]]state.betweenWaves then return"wave running"end if waveActive then return   -----\\---     --///--/               | //\\ |
+ --[[| |X| |]]"wave latched"end if state.inUpgradeZone then return"already at the bench"end if -------------                    |||  |||
+ --[[| /X\ |]]not HasBenchBusiness()then return enabled and("at farm target "..FARM_TARGET)or("credits below "..CREDIT_FLOOR) --||    ||
+ --[[| | | |]]end if not midpoint then return"no upgrade signs found"end return nil end local function Update()state.updates= --||    ||
+ --[[||| |||]]state.updates+1 state.mvm,state.mvmVia=DetectMvM()objResource,state.objResVia=FindFirstValid(                   --|||  |||
+ --[[||   ||]]"CTFObjectiveResource",objResource)if objResource then state.objResIdx=objResource:GetIndex()state.rawBetween=  --| |\/| |
+ --[[||   ||]]objResource:GetPropBool("m_bMannVsMachineBetweenWaves")state.rawWave=objResource:GetPropInt(                    --|  XX  |
+ --[[||| |||]]"m_nMannVsMachineWaveCount")state.betweenWaves=PropFlag(objResource,"m_bMannVsMachineBetweenWaves")state.wave=  --| //\\ |
+ --[[| | | |]]state.rawWave or 0 else state.objResIdx=-1 state.rawBetween=nil state.rawWave=nil state.betweenWaves=false      --| /  \ |
+ --[[| |X| |]]state.wave=0 end local me=entities.GetLocalPlayer()state.alive=me~=nil and me:IsValid()and me:IsAlive()if not   --||    ||
+ --[[|  X  |]]state.alive then state.inUpgradeZone=false state.inSpawn=false return end state.currency=me:GetPropInt(         --||    ||
+-- MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANN =+
+----  ___     ___     ___ -------  ---------  ---------  .----------------------.  ----   ---------  --------  ___     ___     ___    --
+--   |__ \   / _ \   / _ \      -XX\      /XXX-       X  | TWO HUNDRED  CREDITS |     /XXX-       XXX\      / |__ \   / _ \   / _ \ XX-
+--\\    ) | | | | | | | | |  ///   \\\  ///   \\\  ///   '----------------------'   ///   \\\  ///   \\\  ///    ) | | | | | | | | |  \\
+--     / /  | | | | | | | | XX        XXX       XXXX        XXX       XXXX        XXX       XXXX        XXX     / /  | | | | | | | |
+--//  / /_  | |_| | | |_| |  \\\   ///  \\  No. MVM-000002        Treasurer:  ~~Saxton~Hale~~  \\\   ///  \\\  / /_  | |_| | | |_| |  //
+--   |____|  \___/   \___/      XXX/      \XXX-       -XX/      \XXX-       XXX/      \XXX-       -XX/      \ |____|  \___/   \___/ XX-
+-----------  ---------  ---------  ---------  ---------  --------   ---------  --------   ---------  --------   ---------  --------   --
+--=====================================================================================================================================+
+--
+--=====================================================================================================================================+
+----  _____    ___     ___ --  ---------  ---------  ---------  ---------  ---------  ---------  ---------    _____    ___     ___ -----
+--   | ____|  / _ \   / _ \ XXXX       -XXX       .-----------------------------------.       XXX-       /XX | ____|  / _ \   / _ \
+-- / | |__   | | | | | | | |    \\\ ///   \\\\ /  | MANN  CO.  FEDERAL  RESERVE  NOTE |  \ ////   \\\ ///    | |__   | | | | | | | | \
+--XX |___ \  | | | | | | | |      XXX        XXX  '-----------------------------------'  XXX        XXX      |___ \  | | | | | | | | XXX
+-- \  ___) | | |_| | | |_| |    /// \\\   //// \\\\   /// \\\   //// \\\\   /// \\\   //// \\\\   /// \\\     ___) | | |_| | | |_| | /
+--   |____/   \___/   \___/ XXXX      THIS NOTE IS LEGAL TENDER FOR ALL UPGRADES PUBLIC AND PRIVATE      -XX |____/   \___/   \___/
+-------  ---------  ---------  ---------  ---------  ---------  ---------  ---------  ---------  ---------  ---------  ---------  ------
+-- MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANN =+
+ --[[| | | |]]"m_nCurrency")or 0 state.inUpgradeZone,state.zonePath=ReadUpgradeZone(me)state.inSpawn=(me:GetPropInt(          --|||  |||
+ --[[|  X  |]]"m_iSpawnRoomTouchCount")or 0)>0 if state.mvm then local now=globals.CurTime()if now>=nextScan then nextScan=   --||    ||
+ --[[| /X\ |]]now+SCAN_INTERVAL UpdateMidpoint(me:GetAbsOrigin())end end end local function ComputeMove(cmd,from,to)local     --||    ||
+ --[[||| |||]]flat=Vector3(to.x-from.x,to.y-from.y,0)if flat:Length()<1 then return 0,0 end local ang=flat:Angles()local _,   --|||  |||
+ --[[||   ||]]curYaw=cmd:GetViewAngles()local yaw=math.rad(ang.y-curYaw)return math.cos(yaw)*MOVE_SPEED,-math.sin(yaw)*       --| |  | |
+ --[[||   ||]]MOVE_SPEED end local observed_upgrades_count=0 local confirmed_upgrades_request,sent_upgrades_request,step,     --| \\// |
+ --[[||   ||]]clock,grace local OWN_SEND_TTL=2.0 local ownPending={}local function NoteOwnSend(key)if not key then return end --|  XX  |
+ --[[| | | |]]ownPending[#ownPending+1]={key=key,t=globals.CurTime()}end local function        -------------                    | //\\ |
+ --[[| |X| |]]ClaimOwnSend(key)local now=globals.CurTime()for i=1,#ownPending do local    --/--///--     ---\\---               |||  |||
+ --[[| |X| |]]rec=ownPending[i]if rec.key==key and(now-rec.t)<=OWN_SEND_TTL then table --///////             \\\\\\\            ||    ||
+ --[[| | | |]].remove(ownPending,i)return true end end for i=#ownPending,1,-1 do    --//---------           ---\\----\\         ||    ||
+ --[[||| |||]]if(now-ownPending[i].t)>OWN_SEND_TTL then table.remove(ownPending,i --////-  || //-\\\-\X//////-\ \|  -\\\\       |||  |||
+ --[[||   ||]])end end return false end local function FormatKV(name,body)if not --///     ||//    \\ X |/    \\\|     \\\      | \\// |
+ --[[||   ||]]body or body==""then return'"'..name..'"\n{\n}\n'end return'"'..  --//       ||       |   |       ||       \\     |  XX  |
+ --[[||| |||]]name..'"\n{\n'..body..'}\n'end local function SendKV(kv)local    --||     //-+\+     /|   \\     X++--\     \|    | //\\ |
+ --[[| | | |]]key=kv:match('"([^"]+)"')NoteOwnSend(key)local ok=engine.       --||     |/    \----//     \----//    \\     ||   ||/  \||
+ --[[|  X  |]]SendKeyValues(kv)state.sends=state.sends+1 state.lastKVResult=  --||    |-----        ,-|-.        ---- |    ||   ||    ||
+ --[[| /X\ |]]ok if not ok then state.kvFails=state.kvFails+1 local flat=(kv: --||| ///+   --\\    (  |       ///-   ++\\ |||   ||    ||
+ --[[||| |||]]gsub("%s+"," "))state.lastKVFail=flat Log("kvfail:"..flat,      --| \//  \X-+   \     '-|-.     |   +--/  \\| |   ||    ||
+ --[[||   ||]]"SEND FAILED ret="..tostring(ok).."  "..flat.."\n"..(Snapshot   --| |\\  /X-+   |        | )    \   +-X\  //\ |   | |  | |
+ --[[||   ||]]and Snapshot()or""))end return ok end local KV_INTERVAL=0.05    --||| \\++   -///     '--|-'    \\--   +/// |||   | \\// |
+ --[[||   ||]]local MAX_KV_TRIES=3 local pending={}local function QueueKV(kv, --||    | ----                     ---- |    ||   |  XX  |
+ --[[||| |||]]onSuccess)pending[#pending+1]={kv=kv,onSuccess=onSuccess,tries= --||    |\\    //----\     //----\    /|     ||   | //\\ |
+ --[[| |X| |]]0}end local function PumpQueue()local item=pending[1]if not item --|\     \--++X      \   |      X\+-//     ||    |||  |||
+ --[[| /X\ |]]then return false end item.tries=item.tries+1 if SendKV(item.kv)  --\\       ||       |   |       ||       //     ||    ||
+ --[[| | | |]]then table.remove(pending,1)if item.onSuccess then item.onSuccess( --\\\     |\\\    /| X \\    //||     ///      ||    ||
+ --[[||| |||]])end elseif item.tries>=MAX_KV_TRIES then table.remove(pending,1)   --\\\--  |\ \-//////X\-\\\-// ||  ////        |||  |||
+ --[[||   ||]]Log("giveup","GAVE UP after "..item.tries.." tries: "..(item.kv:gsub( --\\----\\---           ---------//         | |\/| |
+ --[[||   ||]]"%s+"," ")).."\n"..(Snapshot and Snapshot()or""))end return true end     --\\\\\\\             ///////            |  XX  |
+ --[[||| |||]]local function begin_upgrade()QueueKV(FormatKV("MvM_UpgradesBegin"),        -----\\---     --///--/               | //\\ |
+ --[[| | | |]]function()observed_upgrades_count=observed_upgrades_count+1 end)end local        -------------                    | /  \ |
+ --[[| |X| |]]function end_upgrade(num_upgrades)num_upgrades=num_upgrades or 0 QueueKV(FormatKV("MvM_UpgradesDone",           --||    ||
+ --[[| /X\ |]]'\t"num_upgrades" "'..num_upgrades..'"\n'),function()observed_upgrades_count=observed_upgrades_count-1 end)end  --||    ||
+ --[[||| |||]]local function respec_upgrades()QueueKV(FormatKV("MVM_Respec"))end local function mvm_upgrade_weapon(itemslot,  --||    ||
+ --[[||   ||]]upgrade,count,onSuccess)local sub='\t"upgrade"\n\t{\n'..'\t\t"itemslot" "'..itemslot..'"\n'..'\t\t"upgrade" "'  --| |  | |
+ --[[||   ||]]..upgrade..'"\n'..'\t\t"count" "'..count..'"\n'..'\t}\n'QueueKV(FormatKV("MVM_Upgrade",sub),onSuccess)end local --| \\// |
+ --[[||   ||]]function ghost_upgrade(count)mvm_upgrade_weapon(1,19,count,function()sent_upgrades_request=                     --|  XX  |
+ --[[||| |||]]sent_upgrades_request+1 end)end local function reset()confirmed_upgrades_request=0 sent_upgrades_request=0 step --| //\\ |
+ --[[| ||| |]]=1 clock=0 grace=true pending={}end local phase={function()begin_upgrade()ghost_upgrade(1)ghost_upgrade(1)      --|||  |||
+ --[[|  X  |]]end_upgrade(2)end,function()begin_upgrade()ghost_upgrade(-1)ghost_upgrade(1)respec_upgrades()end_upgrade(-1)end --||    ||
+-- MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANN =+
+----  _____    ___     ___ ------  ---------  --------  .-----------------------.  ----   ---------  -------  _____    ___     ___    --
+--   | ____|  / _ \   / _ \     -XX\      /XXX-         | FIVE HUNDRED  CREDITS |     /XXX-       XXX\       | ____|  / _ \   / _ \ XX-
+--\\ | |__   | | | | | | | | ///   \\\  ///   \\\  ///  '-----------------------'   ///   \\\  ///   \\\  // | |__   | | | | | | | |  \\
+--   |___ \  | | | | | | | | X        XXX       XXXX        XXX       XXXX        XXX       XXXX        XXX  |___ \  | | | | | | | |
+--//  ___) | | |_| | | |_| | \\\   ///  \\  No. MVM-000003        Treasurer:  ~~Saxton~Hale~~  \\\   ///  \\  ___) | | |_| | | |_| |  //
+--   |____/   \___/   \___/     XXX/      \XXX-       -XX/      \XXX-       XXX/      \XXX-       -XX/       |____/   \___/   \___/ XX-
+-----------  ---------  ---------  ---------  ---------  --------   ---------  --------   ---------  --------   ---------  --------   --
+--=====================================================================================================================================+
+--
+--=====================================================================================================================================+
+----  __    ___     ___     ___ --------  ---------  ---------  ---------  ---------  ---------  ------  __    ___     ___     ___ -----
+--   /_ |  / _ \   / _ \   / _ \       -XXX       .-----------------------------------.       XXX-      /_ |  / _ \   / _ \   / _ \
+-- /  | | | | | | | | | | | | | | \ ///   \\\\ /  | MANN  CO.  FEDERAL  RESERVE  NOTE |  \ ////   \\\ /  | | | | | | | | | | | | | | \
+--XX  | | | | | | | | | | | | | | XXX        XXX  '-----------------------------------'  XXX        XXX  | | | | | | | | | | | | | | XXX
+-- \  | | | |_| | | |_| | | |_| | / \\\   //// \\\\   /// \\\   //// \\\\   /// \\\   //// \\\\   /// \  | | | |_| | | |_| | | |_| | /
+--    |_|  \___/   \___/   \___/      THIS NOTE IS LEGAL TENDER FOR ALL UPGRADES PUBLIC AND PRIVATE      |_|  \___/   \___/   \___/
+-------  ---------  ---------  ---------  ---------  ---------  ---------  ---------  ---------  ---------  ---------  ---------  ------
+-- MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANN =+
+ --[[| | | |]],function()begin_upgrade()ghost_upgrade(1)ghost_upgrade(1)ghost_upgrade(-1)ghost_upgrade(-1)end_upgrade(0)end,} --| /  \ |
+ --[[| |X| |]]local function SettleUpgradeCount()if not clientstate.GetNetChannel()then observed_upgrades_count=0 pending={}  --|||  |||
+ --[[| |X| |]]return end for _=1,observed_upgrades_count do end_upgrade(0)end end local function                              --||    ||
+ --[[| | | |]]attempt_balance_upgrades_count()if observed_upgrades_count>0 then end_upgrade(0)return false end if             --||    ||
+ --[[||| |||]]observed_upgrades_count<0 then begin_upgrade()return false end return true end local function                   --|||  |||
+ --[[||   ||]]UpgradeBlockReason()if not enabled then return"disabled"end if not state.mvm then return"not MvM"end if not     --| \\// |
+ --[[||   ||]]state.alive then return"dead"end if not state.betweenWaves then return"wave running"end if waveActive then      --|  XX  |
+ --[[||| |||]]return"wave latched"end if client.GetConVar("tf_mvm_respec_enabled")~=1 then     -------------                    | //\\ |
+ --[[| | | |]]return"respec disabled"end if not state.inUpgradeZone then return           --/--///--     ---\\---               ||/  \||
+ --[[|  X  |]]"not in upgrade zone"end if state.currency>=FARM_TARGET then return      --///////             \\\\\\\            ||    ||
+ --[[| /X\ |]]"at farm target"end return nil end local function exec_main()if clock --//---------           ---\\----\\         ||    ||
+ --[[||| |||]]>globals.CurTime()then return end local netchan=clientstate.        --////-  || //-\\\-\X//////-\ \|  -\\\\       ||    ||
+ --[[||   ||]]GetNetChannel()local latency=0 if netchan then local avg=netchan.  --///     ||//    \\ X |/    \\\|     \\\      | |  | |
+ --[[||   ||]]GetAvgLatency and netchan:GetAvgLatency(FLOW_OUT)latency=math.    --//       ||       |   |       ||       \\     | \\// |
+ --[[||   ||]]max(avg or 0,netchan:GetLatency(FLOW_OUT)or 0)end latency=math.  --||     //-+\+     /|   \\     X++--\     \|    |  XX  |
+ --[[||| |||]]max(latency,MIN_PHASE_INTERVAL)if PumpQueue()then clock=globals --||     |/    \----//     \----//    \\     ||   | //\\ |
+ --[[| |X| |]].CurTime()+KV_INTERVAL return end if confirmed_upgrades_request --||    |-----        ,-|-.        ---- |    ||   |||  |||
+ --[[| /X\ |]]<sent_upgrades_request then if grace then grace=false else      --||| ///+   --\\    (  |       ///-   ++\\ |||   ||    ||
+ --[[| | | |]]confirmed_upgrades_request=0 sent_upgrades_request=0 end clock= --| \//  \X-+   \     '-|-.     |   +--/  \\| |   ||    ||
+ --[[||| |||]]globals.CurTime()+latency return end if step==4 then step=1     --| |\\  /X-+   |        | )    \   +-X\  //\ |   |||  |||
+ --[[||   ||]]else phase[step]()step=step+1 grace=true end clock=globals.     --||| \\++   -///     '--|-'    \\--   +/// |||   | |\/| |
+ --[[||   ||]]CurTime()+latency end function Snapshot()local netchan=         --||    | ----                     ---- |    ||   |  XX  |
+ --[[||| |||]]clientstate.GetNetChannel()local bench=midpoint and string.     --||    |\\    //----\     //----\    /|     ||   | //\\ |
+ --[[| | | |]]format("%.0f %.0f %.0f",midpoint.x,midpoint.y,midpoint.z)or      --|\     \--++X      \   |      X\+-//     ||    | /  \ |
+ --[[| |X| |]]"none"return table.concat({"  map="..tostring(engine.GetMapName() --\\       ||       |   |       ||       //     ||    ||
+ --[[| /X\ |]]).." mvm="..tostring(state.mvm).."/"..tostring(state.mvmVia)..     --\\\     |\\\    /| X \\    //||     ///      ||    ||
+ --[[||| |||]]" wave="..tostring(state.wave).." between="..tostring(state.        --\\\--  |\ \-//////X\-\\\-// ||  ////        ||    ||
+ --[[||   ||]]betweenWaves).." waveActive="..tostring(waveActive),"  alive="..      --\\----\\---           ---------//         | |  | |
+ --[[||   ||]]tostring(state.alive).." credits="..tostring(state.currency).." zone=".. --\\\\\\\             ///////            | \\// |
+ --[[||   ||]]tostring(state.inUpgradeZone).."(path "..tostring(state.zonePath)..")"..    -----\\---     --///--/               |  XX  |
+ --[[||| |||]]" spawn="..tostring(state.inSpawn),"  enabled="..tostring(enabled)..             -------------                    | //\\ |
+ --[[| ||| |]]" walkBlock="..tostring(WalkBlockReason()).." cycleBlock="..tostring(UpgradeBlockReason()),"  step="..tostring( --|||  |||
+ --[[| /X\ |]]step).." sent="..tostring(sent_upgrades_request).." ack="..tostring(confirmed_upgrades_request).." open="..     --||    ||
+ --[[| | | |]]tostring(observed_upgrades_count).." clock="..tostring(clock).." now="..tostring(globals.CurTime()),"  pumps="  --||    ||
+ --[[||| |||]]..tostring(state.pumps).." execs="..tostring(state.execs).." sends="..tostring(state.sends).." kvFails="..      --|||  |||
+ --[[||   ||]]tostring(state.kvFails).." lastKVResult="..tostring(state.lastKVResult),"  signs="..tostring(state.signs)..     --| |\/| |
+ --[[||   ||]]" bench="..bench.." latency="..tostring(netchan and netchan:GetLatency(FLOW_OUT)).." externalKV="..tostring(    --|  XX  |
+ --[[||| |||]]state.externalKV),},"\n")end local function Guard(name,fn)return function(...)local ok,err=pcall(fn,...)if not  --| //\\ |
+ --[[| | | |]]ok then state.lastError=tostring(err)Log("err:"..name..":"..tostring(err),"ERROR in "..name..": "..tostring(err --| /  \ |
+ --[[| |X| |]]).."\n"..Snapshot())end end end local toggleWasDown=false local function ToggleKeyEdge()local down=input.       --||    ||
+-- MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANN =+
+----  __    ___     ___     ___ -  ---------  --------  .-----------------------.  ----   ---------  --  __    ___     ___     ___    --
+--   /_ |  / _ \   / _ \   / _ \ XX\      /XXX-         | ONE THOUSAND  CREDITS |     /XXX-       XXX\  /_ |  / _ \   / _ \   / _ \ XX-
+--\\  | | | | | | | | | | | | | |  \\\  ///   \\\  ///  '-----------------------'   ///   \\\  ///   \\  | | | | | | | | | | | | | |  \\
+--    | | | | | | | | | | | | | |     XXX       XXXX        XXX       XXXX        XXX       XXXX         | | | | | | | | | | | | | |
+--//  | | | |_| | | |_| | | |_| |  ///  \\  No. MVM-000004        Treasurer:  ~~Saxton~Hale~~  \\\   //  | | | |_| | | |_| | | |_| |  //
+--    |_|  \___/   \___/   \___/ XX/      \XXX-       -XX/      \XXX-       XXX/      \XXX-       -XX/   |_|  \___/   \___/   \___/ XX-
+-----------  ---------  ---------  ---------  ---------  --------   ---------  --------   ---------  --------   ---------  --------   --
+--=====================================================================================================================================+
+--
+--=====================================================================================================================================+
+----  ___     ___     ___     ___ ------  ---------  ---------  ---------  ---------  ---------  ----  ___     ___     ___     ___ -----
+--   |__ \   / _ \   / _ \   / _ \     -XXX       .-----------------------------------.       XXX-    |__ \   / _ \   / _ \   / _ \
+-- /    ) | | | | | | | | | | | | | ///   \\\\ /  | MANN  CO.  FEDERAL  RESERVE  NOTE |  \ ////   \\\    ) | | | | | | | | | | | | | \
+--XX   / /  | | | | | | | | | | | | X        XXX  '-----------------------------------'  XXX        X   / /  | | | | | | | | | | | | XXX
+-- \  / /_  | |_| | | |_| | | |_| | \\\   //// \\\\   /// \\\   //// \\\\   /// \\\   //// \\\\   ///  / /_  | |_| | | |_| | | |_| | /
+--   |____|  \___/   \___/   \___/    THIS NOTE IS LEGAL TENDER FOR ALL UPGRADES PUBLIC AND PRIVATE   |____|  \___/   \___/   \___/
+-------  ---------  ---------  ---------  ---------  ---------  ---------  ---------  ---------  ---------  ---------  ---------  ------
+-- MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANN =+
+ --[[| | | |]]IsButtonDown(TOGGLE_KEY)if engine.Con_IsVisible()or engine.IsGameUIVisible()or engine.IsChatOpen()then          --| /  \ |
+ --[[| | | |]]toggleWasDown=down return false end local pressed=down and not toggleWasDown toggleWasDown=down return pressed  --||/  \||
+ --[[|  X  |]]end local function PollToggle()if not ToggleKeyEdge()then return end enabled=not enabled if enabled then reset( --||    ||
+ --[[| /X\ |]])client.ChatPrintf("\x073FB54A[MvM Walk] transaction half ON")else SettleUpgradeCount()client.ChatPrintf(       --||    ||
+ --[[||| |||]]"\x07E05C5C[MvM Walk] transaction half OFF")end Log(nil,"TOGGLE -> "..(enabled and"ON"or"OFF").."\n"..Snapshot( --||    ||
+ --[[||   ||]]))end callbacks.Register("CreateMove","mvm_walk_move",Guard("CreateMove",function(cmd)Update()state.pumps=state --| |  | |
+ --[[||   ||]].pumps+1 if not UpgradeBlockReason()then state.execs=state.execs+1 local ok,err=pcall(exec_main)if not ok then  --| \\// |
+ --[[||   ||]]state.lastError=tostring(err)Log("exec:"..tostring(err),"ERROR in exec_main: ".. -------------                    |  XX  |
+ --[[||| |||]]tostring(err).."\n"..Snapshot())end end if WalkBlockReason()then return end --/--///--     ---\\---               | //\\ |
+ --[[| |X| |]]if cmd:GetForwardMove()~=0 or cmd:GetSideMove()~=0 then return end local --///////             \\\\\\\            |||  |||
+ --[[| /X\ |]]me=entities.GetLocalPlayer()if not me or not me:IsValid()then return  --//---------           ---\\----\\         ||    ||
+ --[[| | | |]]end local myPos=me:GetAbsOrigin()if not myPos or vector.Distance(   --////-  || //-\\\-\X//////-\ \|  -\\\\       ||    ||
+ --[[||| |||]]myPos,midpoint)<=ARRIVE_RANGE then return end local forward,side=  --///     ||//    \\ X |/    \\\|     \\\      |||  |||
+ --[[||   ||]]ComputeMove(cmd,myPos,midpoint)cmd:SetForwardMove(forward)cmd:    --//       ||       |   |       ||       \\     | |\/| |
+ --[[||   ||]]SetSideMove(side)end))callbacks.Register("FrameStageNotify",     --||     //-+\+     /|   \\     X++--\     \|    |  XX  |
+ --[[||| |||]]"mvm_walk_stageprobe",function(stage)state.fsnFires=state.      --||     |/    \----//     \----//    \\     ||   | //\\ |
+ --[[| | | |]]fsnFires+1 state.fsnStage=stage end)callbacks.Register(         --||    |-----        ,-|-.        ---- |    ||   | /  \ |
+ --[[| |X| |]]"FireGameEvent","mvm_walk_events",Guard("FireGameEvent",        --||| ///+   --\\    (  |       ///-   ++\\ |||   ||    ||
+ --[[| /X\ |]]function(event)local name=event:GetName()if name=="game_newmap" --| \//  \X-+   \     '-|-.     |   +--/  \\| |   ||    ||
+ --[[||| |||]]then ResetMapState()reset()observed_upgrades_count=0 enabled=   --| |\\  /X-+   |        | )    \   +-X\  //\ |   ||    ||
+ --[[||   ||]]true Log(nil,"EVENT game_newmap\n"..Snapshot())elseif name==    --||| \\++   -///     '--|-'    \\--   +/// |||   | |  | |
+ --[[||   ||]]"mvm_begin_wave"then waveActive=true Log(nil,                   --||    | ----                     ---- |    ||   | \\// |
+ --[[||   ||]]"EVENT mvm_begin_wave\n"..Snapshot())elseif name==              --||    |\\    //----\     //----\    /|     ||   |  XX  |
+ --[[||| |||]]"mvm_wave_complete"or name=="mvm_wave_failed"then waveActive=    --|\     \--++X      \   |      X\+-//     ||    | //\\ |
+ --[[| ||| |]]false Log(nil,"EVENT "..name.."\n"..Snapshot())end end))callbacks --\\       ||       |   |       ||       //     |||  |||
+ --[[| /X\ |]].Register("ServerCmdKeyValues","mvm_walk_observe",Guard(           --\\\     |\\\    /| X \\    //||     ///      ||    ||
+ --[[| | | |]]"ServerCmdKeyValues",function(kv)local txt=kv:Get()local key=txt    --\\\--  |\ \-//////X\-\\\-// ||  ////        ||    ||
+ --[[||| |||]]and txt:match('([^"]+)')if ClaimOwnSend(key)then return end if key==  --\\----\\---           ---------//         |||  |||
+ --[[||   ||]]"MvM_UpgradesBegin"then observed_upgrades_count=observed_upgrades_count+ --\\\\\\\             ///////            | |\/| |
+ --[[||   ||]]1 elseif key=="MvM_UpgradesDone"then observed_upgrades_count=               -----\\---     --///--/               |  XX  |
+ --[[||| |||]]observed_upgrades_count-1 else return end state.externalKV=state.externalKV+1    -------------                    | //\\ |
+ --[[| | | |]]Log("extkv:"..tostring(key),"EXTERNAL "..tostring(key).." (not sent by this script)".."  total="..state.        --| /  \ |
+ --[[| |X| |]]externalKV.."\n"..Snapshot())end))local function TextMsg(hud_type,text)if text=='#TF_MVM_NoClassUpgradeUI'then  --||    ||
+ --[[| /X\ |]]client.ChatPrintf("[Buy Bot] It seems like you can't change class, try again")if                                --||    ||
+ --[[||| |||]]attempt_balance_upgrades_count()then observed_upgrades_count=observed_upgrades_count+1                          --||    ||
+ --[[||   ||]]attempt_balance_upgrades_count()end end end local user_message_triggers={[5]=function(UserMessage)local         --|||  |||
+ --[[||   ||]]hud_type=UserMessage:ReadByte()local text=UserMessage:ReadString(256)TextMsg(hud_type,text)end,[60]=function(   --| \\// |
+ --[[||   ||]]UserMessage)local player_index=UserMessage:ReadByte()local current_wave=UserMessage:ReadByte()local             --|  XX  |
+ --[[||| |||]]itemdefinition=UserMessage:ReadInt(16)local attributedefinition=UserMessage:ReadInt(16)local quality=           --| //\\ |
+ --[[| | | |]]UserMessage:ReadByte()local credit_cost=UserMessage:ReadInt(16)end,[64]=function(UserMessage)local mercenary=   --| /  \ |
+-- MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANN =+
+----  ___     ___     ___     ___  ---------  --------  .-----------------------.  ----   ---------    ___     ___     ___     ___    --
+--   |__ \   / _ \   / _ \   / _ \ \      /XXX-         | TWO THOUSAND  CREDITS |     /XXX-       XXX |__ \   / _ \   / _ \   / _ \ XX-
+--\\    ) | | | | | | | | | | | | | \\  ///   \\\  ///  '-----------------------'   ///   \\\  ///       ) | | | | | | | | | | | | |  \\
+--     / /  | | | | | | | | | | | |   XXX       XXXX        XXX       XXXX        XXX       XXXX        / /  | | | | | | | | | | | |
+--//  / /_  | |_| | | |_| | | |_| | //  \\  No. MVM-000005        Treasurer:  ~~Saxton~Hale~~  \\\     / /_  | |_| | | |_| | | |_| |  //
+--   |____|  \___/   \___/   \___/ /      \XXX-       -XX/      \XXX-       XXX/      \XXX-       -XX |____|  \___/   \___/   \___/ XX-
+-----------  ---------  ---------  ---------  ---------  --------   ---------  --------   ---------  --------   ---------  --------   --
+--=====================================================================================================================================+
+--
+--=====================================================================================================================================+
+----  _____    ___     ___     ___ -----  ---------  ---------  ---------  ---------  ---------  ---  _____    ___     ___     ___ -----
+--   | ____|  / _ \   / _ \   / _ \    -XXX       .-----------------------------------.       XXX-   | ____|  / _ \   / _ \   / _ \
+-- / | |__   | | | | | | | | | | | | //   \\\\ /  | MANN  CO.  FEDERAL  RESERVE  NOTE |  \ ////   \\ | |__   | | | | | | | | | | | | \
+--XX |___ \  | | | | | | | | | | | |         XXX  '-----------------------------------'  XXX         |___ \  | | | | | | | | | | | | XXX
+-- \  ___) | | |_| | | |_| | | |_| | \\   //// \\\\   /// \\\   //// \\\\   /// \\\   //// \\\\   //  ___) | | |_| | | |_| | | |_| | /
+--   |____/   \___/   \___/   \___/   THIS NOTE IS LEGAL TENDER FOR ALL UPGRADES PUBLIC AND PRIVATE  |____/   \___/   \___/   \___/
+-------  ---------  ---------  ---------  ---------  ---------  ---------  ---------  ---------  ---------  ---------  ---------  ------
+-- MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANN =+
+ --[[||   ||]]UserMessage:ReadByte()local itemdefinition=UserMessage:ReadInt(16)local upgrade=UserMessage:ReadByte()local     --|  /\  |
+ --[[||| |||]]credit_cost=UserMessage:ReadInt(16)confirmed_upgrades_request=confirmed_upgrades_request+1 end,[66]=function(   --| //\\ |
+ --[[| |X| |]]UserMessage)local steamID64=UserMessage:ReadInt(64)local current_wave=UserMessage:ReadByte()local               --|||  |||
+ --[[| /X\ |]]mvm_event_type=UserMessage:ReadByte()local credit_cost=UserMessage:ReadInt(16)end,}callbacks.Register(          --||    ||
+ --[[| | | |]]"DispatchUserMessage","mvm_walk_usermsg",Guard("DispatchUserMessage",function(UserMessage)local id=UserMessage: --||    ||
+ --[[||| |||]]GetID()if user_message_triggers[id]then user_message_triggers[id](UserMessage)end end))callbacks.Register(      --|||  |||
+ --[[||   ||]]"Draw","mvm_walk_draw",Guard("Draw",function()PollToggle()if not DEBUG then return end draw.SetFont(FONT)draw.  --| |\/| |
+ --[[||   ||]]Color(255,255,255,255)local walkBlocked=WalkBlockReason()local upgBlocked=       -------------                    |  XX  |
+ --[[||| |||]]UpgradeBlockReason()local bench="none"if midpoint then bench=string.format( --/--///--     ---\\---               | //\\ |
+ --[[| | | |]]"%.0f %.0f %.0f",midpoint.x,midpoint.y,midpoint.z)end local x=math.      --///////             \\\\\\\            | /  \ |
+ --[[| |X| |]]floor(SCREEN_W*0.05)local y=math.floor(SCREEN_H*0.20)local lines={    --//---------           ---\\----\\         ||    ||
+ --[[| /X\ |]]"Updates: "..tostring(state.updates),"MvM: "..tostring(state.mvm).. --////-  || //-\\\-\X//////-\ \|  -\\\\       ||    ||
+ --[[||| |||]]" ("..state.mvmVia..")","Alive: "..tostring(state.alive),          --///     ||//    \\ X |/    \\\|     \\\      ||    ||
+ --[[||   ||]]"Between waves: "..tostring(state.betweenWaves)..(waveActive and  --//       ||       |   |       ||       \\     | |  | |
+ --[[||   ||]]" (latched)"or""),"Wave: "..tostring(state.wave),"Credits: "..   --||     //-+\+     /|   \\     X++--\     \|    | \\// |
+ --[[||   ||]]tostring(state.currency),"In upgrade zone: "..tostring(state.   --||     |/    \----//     \----//    \\     ||   |  XX  |
+ --[[||| |||]]inUpgradeZone).."  (path "..tostring(state.zonePath).." of "..# --||    |-----        ,-|-.        ---- |    ||   | //\\ |
+ --[[| ||| |]]UPGRADE_ZONE_PATHS..")","In spawn: "..tostring(state.inSpawn),  --||| ///+   --\\    (  |       ///-   ++\\ |||   |||  |||
+ --[[| /X\ |]]"Signs found: "..tostring(state.signs),"Bench: "..bench,        --| \//  \X-+   \     '-|-.     |   +--/  \\| |   ||    ||
+ --[[| | | |]]"Walking: "..(walkBlocked and("no, "..walkBlocked)or"yes"),     --| |\\  /X-+   |        | )    \   +-X\  //\ |   ||    ||
+ --[[||| |||]]"Cycling: "..(upgBlocked and("no, "..upgBlocked)or"yes").."  [" --||| \\++   -///     '--|-'    \\--   +/// |||   |||  |||
+ --[[||   ||]]..TOGGLE_KEY_NAME.."]","","pumps "..tostring(state.pumps)..     --||    | ----                     ---- |    ||   | |\/| |
+ --[[||   ||]]"  execs "..tostring(state.execs).."  sends "..tostring(state.  --||    |\\    //----\     //----\    /|     ||   |  XX  |
+ --[[||| |||]]sends),"respec cvar: "..tostring(client.GetConVar(               --|\     \--++X      \   |      X\+-//     ||    | //\\ |
+ --[[| | | |]]"tf_mvm_respec_enabled")),"fsn "..tostring(state.fsnFires)..      --\\       ||       |   |       ||       //     | /  \ |
+ --[[| |X| |]]"  stage "..tostring(state.fsnStage).."  want "..tostring(         --\\\     |\\\    /| X \\    //||     ///      ||    ||
+ --[[| /X\ |]]STAGE_WANT).."  flow "..tostring(FLOW_OUT).."  key "..tostring(     --\\\--  |\ \-//////X\-\\\-// ||  ////        ||    ||
+ --[[||| |||]]TOGGLE_KEY),"kv: ret="..tostring(state.lastKVResult).."  fails "..    --\\----\\---           ---------//         ||    ||
+ --[[||   ||]]tostring(state.kvFails).."/"..tostring(state.sends).."  ext "..tostring( --\\\\\\\             ///////            |||  |||
+ --[[||   ||]]state.externalKV),"log: "..(logReady and logPath or("OFF - "..tostring(     -----\\---     --///--/               | \\// |
+ --[[||   ||]]logFail))),"step "..tostring(step).."  sent "..tostring(sent_upgrades_request).. -------------                    |  XX  |
+ --[[||| |||]]"  ack "..tostring(confirmed_upgrades_request).."  open "..tostring(observed_upgrades_count),"objres: "..state. --| //\\ |
+ --[[| |X| |]]objResVia.." idx "..tostring(state.objResIdx).."  raw btw="..tostring(state.rawBetween).." wave="..tostring(    --||/  \||
+ --[[|  X  |]]state.rawWave),"proxy: "..state.proxyVia,"props: "..tostring(state.props).." via "..state.propsVia,}for i=1,#   --||    ||
+ --[[| / \ |]]lines do draw.Text(x,y+(i-1)*18,lines[i])end if midpoint then local screenPos=client.WorldToScreen(midpoint)if  --||    ||
+ --[[||| |||]]screenPos then draw.Text(screenPos[1],screenPos[2],"bench")end end end))callbacks.Register("Unload",            --|||  |||
+ --[[||   ||]]"mvm_walk_unload",Guard("Unload",function()Log(nil,"UNLOAD\n"..Snapshot())SettleUpgradeCount()end))             --| |  | |
+ --[[||   ||]]ResetMapState()reset()pcall(function()InitLog()Log(nil,string.rep("=",68))Log(nil,                              --|  XX  |
+ --[[||| |||]]"SESSION START  MVM-Upgrade-Walk".."  flow="..tostring(FLOW_OUT).." stage="..tostring(STAGE_WANT).." key="..    --| //\\ |
+ --[[| | | |]]tostring(TOGGLE_KEY).."  bareEnums="..tostring(FLOW_OUTGOING~=nil).."  io="..tostring(type(io)=="table"and io.  --| /  \ |
+-- MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANN =+
+----  _____    ___     ___     ___ ---------  --------  .------------------------.  ---   ---------   _____    ___     ___     ___    --
+--   | ____|  / _ \   / _ \   / _ \       /XXX-         | FIVE THOUSAND  CREDITS |    /XXX-       XX | ____|  / _ \   / _ \   / _ \ XX-
+--\\ | |__   | | | | | | | | | | | | \  ///   \\\  ///  '------------------------'  ///   \\\  ///   | |__   | | | | | | | | | | | |  \\
+--   |___ \  | | | | | | | | | | | |  XXX       XXXX        XXX       XXXX        XXX       XXXX     |___ \  | | | | | | | | | | | |
+--//  ___) | | |_| | | |_| | | |_| | /  \\  No. MVM-000006        Treasurer:  ~~Saxton~Hale~~  \\\    ___) | | |_| | | |_| | | |_| |  //
+--   |____/   \___/   \___/   \___/       \XXX-       -XX/      \XXX-       XXX/      \XXX-       -X |____/   \___/   \___/   \___/ XX-
+-----------  ---------  ---------  ---------  ---------  --------   ---------  --------   ---------  --------   ---------  --------   --
+--=====================================================================================================================================+
+--
+--=====================================================================================================================================+
+----  __    ___     ___     ___     ___   ---------  ---------  ---------  ---------  ---------  __    ___     ___     ___     ___ -----
+--   /_ |  / _ \   / _ \   / _ \   / _ \ XX       .-----------------------------------.       X /_ |  / _ \   / _ \   / _ \   / _ \
+-- /  | | | | | | | | | | | | | | | | | | \\\\ /  | MANN  CO.  FEDERAL  RESERVE  NOTE |  \ ////  | | | | | | | | | | | | | | | | | | \
+--XX  | | | | | | | | | | | | | | | | | |    XXX  '-----------------------------------'  XXX     | | | | | | | | | | | | | | | | | | XXX
+-- \  | | | |_| | | |_| | | |_| | | |_| | //// \\\\   /// \\\   //// \\\\   /// \\\   //// \\\\  | | | |_| | | |_| | | |_| | | |_| | /
+--    |_|  \___/   \___/   \___/   \  THIS NOTE IS LEGAL TENDER FOR ALL UPGRADES PUBLIC AND PRIVATE   \___/   \___/   \___/   \___/
+-------  ---------  ---------  ---------  ---------  ---------  ---------  ---------  ---------  ---------  ---------  ---------  ------
+-- MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANN =+
+ --[[||   ||]]open~=nil).."  log="..tostring(logPath))end)                                                                    --|  XX  |
+--   ||| |||                                                                                                                    | //\\ |
+--   | | | |                                                                                                                    | /  \ |
+--   | |X| |                                                                                                                    ||    ||
+--   | /X\ |                                                                                                                    ||    ||
+--   ||| |||                                                                                                                    ||    ||
+--   ||   ||                                                                                                                    | |  | |
+--   ||   ||                                                                                     -----------                    | \\// |
+--   ||   ||                                                                                /--///--     ---\\---               |  XX  |
+--   ||| |||                                                                             ///////             \\\\\\\            | //\\ |
+--   | ||| |                                                                          //---------           ---\\----\\         |||  |||
+--   | /X\ |                                                                        ////-  || //-\\\-\X//////-\ \|  -\\\\       ||    ||
+--   | | | |                                                                       ///     ||//    \\ X |/    \\\|     \\\      ||    ||
+--   ||| |||                                                                      //       ||       |   |       ||       \\     |||  |||
+--   ||   ||                                                                     ||     //-+\+     /|   \\     X++--\     \|    | |\/| |
+--   ||   ||                                                                    ||     |/    \----//     \----//    \\     ||   |  XX  |
+--   ||| |||                                                                    ||    |-----        ,-|-.        ---- |    ||   | //\\ |
+--   | | | |                                                                    ||| ///+   --\\    (  |       ///-   ++\\ |||   | /  \ |
+--   | |X| |                                                                    | \//  \X-+   \     '-|-.     |   +--/  \\| |   ||    ||
+--   | /X\ |                                                                    | |\\  /X-+   |        | )    \   +-X\  //\ |   ||    ||
+--   ||| |||                                                                    ||| \\++   -///     '--|-'    \\--   +/// |||   ||    ||
+--   ||   ||                                                                    ||    | ----                     ---- |    ||   |||  |||
+--   ||   ||                                                                    ||    |\\    //----\     //----\    /|     ||   | \\// |
+--   ||   ||                                                                     |\     \--++X      \   |      X\+-//     ||    |  XX  |
+--   ||| |||                                                                      \\       ||       |   |       ||       //     | //\\ |
+--   | |X| |                                                                       \\\     |\\\    /| X \\    //||     ///      ||/  \||
+--   |  X  |                                                                        \\\--  |\ \-//////X\-\\\-// ||  ////        ||    ||
+--   | / \ |                                                                          \\----\\---           ---------//         ||    ||
+--   ||| |||                                                                             \\\\\\\             ///////            |||  |||
+--   ||   ||                                                                                ---\\---     --///--/               | |  | |
+--   ||   ||                                                                                     -----------                    |  XX  |
+--   ||| |||                                                                                                                    | //\\ |
+--   | | | |                                                                                                                    | /  \ |
+--   | ||| |                                                                                                                    |||  |||
+--   | |X| |                                                                                                                    ||    ||
+--   | | | |                                                                                                                    ||    ||
+--   ||   ||                                                                                                                    |||  |||
+--   ||   ||                                                                                                                    | \\// |
+--   ||   ||                                                                                                                    |  XX  |
+--   ||   ||                                                                                                                    |  /\  |
+-- MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANNCO*MANN =+
+----  __    ___     ___     ___     ___ ----  --------  .-----------------------.  ----   -----  __    ___     ___     ___     ___    --
+--   /_ |  / _ \   / _ \   / _ \   / _ \  /XXX-         | TEN THOUSAND  CREDITS |     /XXX-     /_ |  / _ \   / _ \   / _ \   / _ \ XX-
+--\\  | | | | | | | | | | | | | | | | | | /   \\\  ///  '-----------------------'   ///   \\\    | | | | | | | | | | | | | | | | | |  \\
+--    | | | | | | | | | | | | | | | | | |       XXXX        XXX       XXXX        XXX       XXX  | | | | | | | | | | | | | | | | | |
+--//  | | | |_| | | |_| | | |_| | | |_| |   No. MVM-000007        Treasurer:  ~~Saxton~Hale~~    | | | |_| | | |_| | | |_| | | |_| |  //
+--    |_|  \___/   \___/   \___/   \___/  \XXX-       -XX/      \XXX-       XXX/      \XXX-      |_|  \___/   \___/   \___/   \___/ XX-
+-----------  ---------  ---------  ---------  ---------  --------   ---------  --------   ---------  --------   ---------  --------   --
+--=====================================================================================================================================+
+--
+---------   /------   /-------  //-------  /-------   /------   /-------  /-------\  /-------   /------   /-------  /-------   /------- 
+--      XXXX       XXXX      \XXX       XXX/      XXXX       XXXX      \XXX       XXX/      XXXX      \XXX/      XXXX       XXX       XX
+--\\  ///  \\\\ ////  \\\  ///  \\\   ///  \\\  ///  \\\\ ////  \\\  ///  \\\   ///  \\\  ///  \\\\ ///   \\\  ///  \\\  //// \\\\  /// 
+-- /XXX       XXX       XXXX      /XXX\      XXXX       XXX       XXXX      /XXX\      XXXX      /XXX       XXX\      XXXX       XXXX   
+----  \-------   \-------  \\------   \-------  \-------   \-------  \-------   \------/  \-------  \\-------  \-------   \------   \---
+--
+--
+--                                                        cash out responsibly.
+--
+---------   /------   /-------  //-------  /-------   /------   /-------  /-------\  /-------   /------   /-------  /-------   /------- 
+--      XXXX       XXXX      \XXX       XXX/      XXXX       XXXX      \XXX       XXX/      XXXX      \XXX/      XXXX       XXX       XX
+--\\  ///  \\\\ ////  \\\  ///  \\\   ///  \\\  ///  \\\\ ////  \\\  ///  \\\   ///  \\\  ///  \\\\ ///   \\\  ///  \\\  //// \\\\  /// 
+-- /XXX       XXX       XXXX      /XXX\      XXXX       XXX       XXXX      /XXX\      XXXX      /XXX       XXX\      XXXX       XXXX   
+----  \-------   \-------  \\------   \-------  \-------   \-------  \-------   \------/  \-------  \\-------  \-------   \------   \---
